@@ -4,7 +4,7 @@ import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } 
 import { CSS } from "@dnd-kit/utilities";
 import {
   AlertTriangle, AppWindow, ChevronDown, ChevronRight, Command, Folder, GripVertical, Hourglass, LayoutGrid, Plus,
-  RefreshCw, SunMedium, Timer, Waves, X, Zap,
+  RefreshCw, SunMedium, Timer, Volume2, Waves, X, Zap,
 } from "lucide-react";
 import { ACT, api } from "../lib/api";
 import { useApp, type Component, type TreeNode } from "../lib/store";
@@ -15,8 +15,23 @@ import { tr } from "../lib/i18n";
 import { Button, Field, Modal, Slider, Spinner } from "./ui";
 import { PcControlEditor } from "./editors/PcControlEditor";
 
+const TIMER_COMMANDS = [
+  { label: "Start", value: "START" }, { label: "Pause", value: "PAUSE" }, { label: "Resume", value: "RESUM" },
+  { label: "Cancel", value: "CANCEL" }, { label: "Restart", value: "RESTART" },
+];
+
+/** Firmware 1.0.9 still runs timer actions but no longer lists them (act 1205),
+ * so the picker adds this node under "Other". Option 1 is filled from this
+ * app's Timer cards (see useOptions). */
+const TIMER_NODE: TreeNode = {
+  id: "timer", last: true, name: "Timer", type: "TIMER", objectName: "Timer", components: [
+    { id: "1", name: "Timer", uiType: "SELECT", inputType: "STR", options: [] },
+    { id: "2", name: "Action", uiType: "SELECT", inputType: "STR", options: TIMER_COMMANDS },
+  ],
+};
+
 // Used when the bar is offline, so actions can still be edited. Mirrors the
-// bar's own catalog (act 1205) for firmware 1.0.1.
+// bar's own catalog (act 1205) for firmware 1.0.9.
 const OFFLINE_ROOT: TreeNode[] = [
   { id: "sc.delay", last: true, name: "Delay", type: "DELAY", components: [{ id: "1", uiType: "INPUT", inputType: "INT", min: 1, max: 300, unit: "second" }] },
   { id: "profile", last: true, name: "Switch Profile", type: "CHANGE_PROFILE", objectName: "Corebar", components: [{ id: "1", uiType: "SELECT", inputType: "STR", options: [] }] },
@@ -25,7 +40,10 @@ const OFFLINE_ROOT: TreeNode[] = [
   { id: "sc.other", last: false, name: "Other" },
 ];
 const OFFLINE_CHILDREN: Record<string, TreeNode[]> = {
-  "sc.corebar": [{ id: "bright", last: true, name: "Screen Brightness", type: "BRIGHT", objectName: "Corebar", components: [{ id: "corebar.bright", uiType: "SEEKBAR", inputType: "INT", min: 1, max: 100 }] }],
+  "sc.corebar": [
+    { id: "corebar", last: true, name: "Screen Brightness", type: "BRIGHT", objectName: "Corebar", components: [{ id: "corebar.bright", uiType: "SEEKBAR", inputType: "INT", min: 1, max: 100 }] },
+    { id: "corebar", last: true, name: "Volume", type: "VOLUME", objectName: "Corebar", components: [{ id: "corebar.volume", uiType: "SEEKBAR", inputType: "INT", min: 1, max: 100 }] },
+  ],
   "sc.other": [
     { id: "activity", last: true, name: "App Start", type: "ACTIVITY", objectName: "App", components: [{ id: "1", uiType: "SELECT", inputType: "STR", options: [] }] },
     { id: "sound", last: true, name: "Soundscape", type: "SOUND_SCAPE", objectName: "Soundscape", components: [{ id: "1", uiType: "SELECT", inputType: "STR", options: [
@@ -34,18 +52,24 @@ const OFFLINE_CHILDREN: Record<string, TreeNode[]> = {
       { label: "HissBubble", value: "sys.app.soundscape.5" }, { label: "Sonata of Sunrise", value: "sys.app.soundscape.6" },
       { label: "Serenade of Droplets", value: "sys.app.soundscape.7" },
     ] }] },
-    { id: "sound", last: true, name: "Timer", type: "TIMER", objectName: "Timer", components: [
-      { id: "1", uiType: "INPUT", inputType: "STR", name: "定时器" },
-      { id: "2", uiType: "SELECT", inputType: "STR", name: "动作", options: [
-        { label: "启动", value: "START" }, { label: "暂停", value: "PAUSE" }, { label: "恢复暂停", value: "RESUM" },
-        { label: "取消", value: "CANCEL" }, { label: "重启", value: "RESTART" },
-      ] },
-    ] },
+    TIMER_NODE,
   ],
 };
 
+/** Actions this app can't set up: "Plugin" has no action behind it on 1.0.9,
+ * and app capabilities need a parameter flow (acts 30750–30752) not built yet. */
+const HIDDEN_TYPES = new Set(["PLUGIN_WIDGET", "APP_CAPABILITY"]);
+
+/** Tidies a level of the bar's action tree. Firmware 1.0.9 also lists a bare
+ * volume slider at the root (no name or type), which isn't an action. */
+function cleanNodes(id: string, nodes: TreeNode[]): TreeNode[] {
+  const out = nodes.filter((n) => (n.name || n.type) && !HIDDEN_TYPES.has(n.type ?? ""));
+  if (id === "sc.other" && !out.some((n) => n.type === "TIMER")) out.push(TIMER_NODE);
+  return out;
+}
+
 const NAME: Record<string, string> = {
-  DELAY: "Wait", CHANGE_PROFILE: "Switch profile", PC_CONTROL: "Computer action", BRIGHT: "Screen brightness",
+  DELAY: "Wait", CHANGE_PROFILE: "Switch profile", PC_CONTROL: "Computer action", BRIGHT: "Screen brightness", VOLUME: "Bar volume",
   ACTIVITY: "Open app on the bar", SOUND_SCAPE: "Play soundscape", TIMER: "Control a timer",
 };
 const BRANCH_NAME: Record<string, string> = { "sc.corebar": "Bar", "sc.devices": "Devices", scene: "Scenes", "sc.other": "Other" };
@@ -56,7 +80,7 @@ export function actionIcon(a: { type?: string; pc?: PcControl }, size = 14): Rea
     return <I size={size} />;
   }
   const map: Record<string, ReactNode> = {
-    DELAY: <Hourglass size={size} />, CHANGE_PROFILE: <LayoutGrid size={size} />, BRIGHT: <SunMedium size={size} />,
+    DELAY: <Hourglass size={size} />, CHANGE_PROFILE: <LayoutGrid size={size} />, BRIGHT: <SunMedium size={size} />, VOLUME: <Volume2 size={size} />,
     ACTIVITY: <AppWindow size={size} />, SOUND_SCAPE: <Waves size={size} />, TIMER: <Timer size={size} />,
   };
   return map[a.type ?? ""] ?? <Zap size={size} />;
@@ -134,7 +158,7 @@ function useTree() {
     setChildren((c) => ({ ...c, [id]: "loading" }));
     try {
       const nodes = await api.request<TreeNode[]>(ACT.actionTree, id);
-      setChildren((c) => ({ ...c, [id]: Array.isArray(nodes) ? nodes : [] }));
+      setChildren((c) => ({ ...c, [id]: cleanNodes(id, Array.isArray(nodes) ? nodes : []) }));
     } catch {
       setChildren((c) => ({ ...c, [id]: id === "" ? OFFLINE_ROOT : "error" }));
     }
@@ -298,7 +322,7 @@ function useOptions(node: TreeNode, c: Component): { label: string; value: strin
 
 function ComponentField({ node, c, value, onChange }: { node: TreeNode; c: Component; value: unknown; onChange: (v: unknown) => void }) {
   const options = useOptions(node, c);
-  const label = tr(c.name) || (node.type === "DELAY" ? "Wait for" : node.type === "CHANGE_PROFILE" ? "Profile" : node.type === "BRIGHT" ? "Brightness" : node.type === "SOUND_SCAPE" ? "Sound" : node.type === "ACTIVITY" ? "App" : "Value");
+  const label = tr(c.name) || (node.type === "DELAY" ? "Wait for" : node.type === "CHANGE_PROFILE" ? "Profile" : node.type === "BRIGHT" ? "Brightness" : node.type === "VOLUME" ? "Volume" : node.type === "SOUND_SCAPE" ? "Sound" : node.type === "ACTIVITY" ? "App" : "Value");
 
   if (options) {
     const empty = node.type === "TIMER" ? "Add a Timer card to a profile first." : node.type === "ACTIVITY" ? "No apps found on the bar." : "No options available.";
@@ -348,7 +372,7 @@ function summarize(node: TreeNode, values: Record<string, unknown>): string {
   switch (node.type) {
     case "DELAY": return `${first} second${Number(first) === 1 ? "" : "s"}`;
     case "CHANGE_PROFILE": return doc.profiles.find((p) => p.id === first)?.name ?? String(first);
-    case "BRIGHT": return `${first}%`;
+    case "BRIGHT": case "VOLUME": return `${first}%`;
     case "ACTIVITY": return apps.find((a) => a.application === first)?.appName ?? String(first);
     case "TIMER": {
       const timer = doc.profiles.flatMap((p) => p.widgets).find((w) => w.uid === values["1"]);

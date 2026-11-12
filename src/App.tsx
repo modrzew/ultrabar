@@ -108,12 +108,13 @@ function DeployButton() {
   const deploy = useApp((s) => s.deploy);
   const doc = useApp((s) => s.doc);
   const dirty = useApp((s) => isDirty(s));
+  const triggerTypes = useApp((s) => s.catalog.triggers).map((t) => t.type);
   const [confirm, setConfirm] = useState(false);
   const online = status.state === "online";
   const running = deploy.phase === "running";
 
   const start = () => {
-    const problems = findProblems(doc);
+    const problems = findProblems(doc, triggerTypes);
     if (!doc.deployedAt || problems.length) setConfirm(true);
     else void useApp.getState().runDeploy();
   };
@@ -142,7 +143,8 @@ function DeployButton() {
 function DeployConfirm({ onClose }: { onClose: () => void }) {
   const doc = useApp((s) => s.doc);
   const bar = useApp((s) => s.status.bar);
-  const problems = findProblems(doc);
+  const triggerTypes = useApp((s) => s.catalog.triggers).map((t) => t.type);
+  const problems = findProblems(doc, triggerTypes);
   const first = !doc.deployedAt;
   return (
     <Modal
@@ -166,7 +168,7 @@ function DeployConfirm({ onClose }: { onClose: () => void }) {
         )}
         {problems.length > 0 && (
           <>
-            <p className="muted" style={{ margin: 0 }}>These will be sent, but won't work on the bar until you finish them:</p>
+            <p className="muted" style={{ margin: 0 }}>These won't work on the bar until you fix them:</p>
             <div className="problems">
               {problems.slice(0, 8).map((p, i) => (
                 <button

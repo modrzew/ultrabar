@@ -59,7 +59,8 @@ export const WIDGETS: Record<WidgetType, WidgetDef> = {
   APPS: { label: "App", description: "Launch an app on the bar", icon: AppWindow, units: 1 },
   PC_CONTROL: { label: "Computer action", description: "Control this computer", icon: Command, units: 1, iconCard: true },
   SCENE: { label: "Multi-action", description: "Run several actions in a row", icon: Layers, units: 1, iconCard: true },
-  SET: { label: "Bar settings", description: "Brightness, sound, network", icon: Settings2, units: 1 },
+  /** Removed in bar firmware 1.0.9; kept so older layouts still load. */
+  SET: { label: "Bar settings", description: "No longer available on the bar", icon: Settings2, units: 1 },
   DEVICE: { label: "Device", description: "Smart home device", icon: Lightbulb, units: 1 },
 };
 

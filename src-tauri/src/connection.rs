@@ -21,7 +21,7 @@ use tokio::time::Instant;
 use tokio_rustls::TlsConnector;
 
 use crate::discovery;
-use crate::protocol::{Envelope, MAX_LINE, act};
+use crate::protocol::{Envelope, MAX_LINE, act, parse_line};
 use crate::store::SavedBar;
 use crate::{AppState, pc_agent, tls};
 
@@ -30,6 +30,7 @@ const AUTH_TIMEOUT: Duration = Duration::from_secs(5);
 const PAIR_WINDOW: Duration = Duration::from_secs(12);
 const HEARTBEAT_EVERY: Duration = Duration::from_secs(3);
 const DEAD_AFTER: Duration = Duration::from_secs(15);
+const PROBE_TIMEOUT: Duration = Duration::from_millis(600);
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -201,6 +202,31 @@ impl Ctx {
         let _ = st.store.save_settings(&s);
     }
 
+    /// Picks up a new firmware version (bars update in place) or command port
+    /// from a discovery reply at the address we're about to connect to.
+    fn refresh(&mut self, f: &discovery::FoundBar) {
+        if f.serial_no != self.bar.serial_no {
+            return;
+        }
+        let changed = f.tcp_port != self.bar.tcp_port
+            || (f.ver.is_some() && f.ver != self.bar.ver)
+            || (f.name.is_some() && f.name != self.bar.name);
+        if !changed {
+            return;
+        }
+        self.bar.tcp_port = f.tcp_port;
+        if f.ver.is_some() {
+            self.bar.ver = f.ver.clone();
+        }
+        if f.name.is_some() {
+            self.bar.name = f.name.clone();
+        }
+        let st = self.app.state::<AppState>();
+        let mut s = st.settings.lock().unwrap();
+        s.upsert_bar(f);
+        let _ = st.store.save_settings(&s);
+    }
+
     /// The bar may have moved (DHCP) or changed its command port.
     async fn rediscover(&mut self) {
         let Ok(found) = discovery::discover(Duration::from_millis(1500), &[]).await else {
@@ -246,6 +272,7 @@ async fn idle_wait(
 }
 
 struct Pending {
+    act: i64,
     reply: oneshot::Sender<Reply>,
     deadline: Instant,
 }
@@ -271,6 +298,11 @@ async fn run(
         // While waiting for the user to pair, reconnects happen silently.
         if !(ctx.status.state == ConnState::NeedsPairing && ctx.bar.token.is_none() && !pair_now) {
             ctx.set(ConnState::Connecting, None);
+        }
+        if let Ok(IpAddr::V4(ip)) = ctx.bar.ip.parse::<IpAddr>()
+            && let Some(found) = discovery::probe(ip, PROBE_TIMEOUT).await
+        {
+            ctx.refresh(&found);
         }
         let (stream, local_ip) = match open(&ctx.bar).await {
             Ok(s) => s,
@@ -344,7 +376,7 @@ async fn run(
                     last_recv = Instant::now();
                     let line = line.trim();
                     if line.is_empty() { continue; }
-                    let Ok(env) = serde_json::from_str::<Envelope>(line) else { continue };
+                    let Some(env) = parse_line(line) else { continue };
 
                     if env.act == act::AUTH && env.id.is_some() && env.id == auth_id {
                         auth_id = None;
@@ -405,6 +437,13 @@ async fn run(
                         continue;
                     }
 
+                    if let Some(id) = env.unknown_act_for()
+                        && let Some(p) = pending.remove(id)
+                    {
+                        let _ = p.reply.send(Err(RequestError::new(-5, format!("The bar doesn't support this request (act {}). Its firmware may be newer or older than this app expects.", p.act))));
+                        continue;
+                    }
+
                     if let Some(id) = &env.id
                         && let Some(p) = pending.remove(id)
                     {
@@ -461,7 +500,7 @@ async fn run(
                             break;
                         }
                         last_sent = Instant::now();
-                        pending.insert(id, Pending { reply, deadline: Instant::now() + timeout });
+                        pending.insert(id, Pending { act: a, reply, deadline: Instant::now() + timeout });
                     }
                 },
 

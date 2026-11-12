@@ -314,6 +314,7 @@ input[type="range"].slider::-webkit-slider-thumb { -webkit-appearance: none; wid
 .drop-caret { flex: none; width: 3px; align-self: stretch; margin: calc(20px * var(--s)) calc(-11.5px * var(--s)); border-radius: 2px; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
 
 .card-label { position: absolute; left: 0; right: 0; bottom: calc(18px * var(--s)); text-align: center; font-size: calc(26px * var(--s)); font-weight: 550; padding: 0 calc(16px * var(--s)); color: rgba(255, 255, 255, 0.85); }
+.card-label.top { top: calc(20px * var(--s)); bottom: auto; text-align: left; padding: 0 calc(30px * var(--s)); }
 .card-center { position: absolute; inset: 0; display: grid; place-items: center; }
 
 .c-time { background: radial-gradient(120% 140% at 0% 100%, #2a6fd6 0%, #10205a 40%, #06081d 75%); }

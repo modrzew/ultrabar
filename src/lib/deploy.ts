@@ -26,9 +26,21 @@ export function barAppIconUrl(pkg: string, host = "127.0.0.1") {
   return `http://${host}:8080/widget/icon?id=${encodeURIComponent(pkg)}&type=application&scheme=30`;
 }
 
+/** Cards whose whole face is an image this app draws (color + symbol). */
+export function hasCardArt(w: Widget) {
+  return w.type === "PC_CONTROL" || w.type === "SCENE";
+}
+
+/** Card types the bar no longer has (firmware 1.0.9 shows them as "Not available"). */
+export function isRetired(w: Widget) {
+  return w.type === "SET";
+}
+
 export function widgetPayload(w: Widget, iconUrl?: string): Record<string, unknown> {
   const p: Record<string, unknown> = { id: deployId(w), type: w.type, name: w.name, iconScale: w.iconScale };
   if (iconUrl) p.icon = iconUrl;
+  // Card art already contains the symbol at the chosen size; let it fill the card.
+  if (iconUrl && hasCardArt(w)) p.iconScale = 100;
   switch (w.type) {
     case "TIMER":
       p.param = { time: hms(w.timer?.seconds ?? 0) };
@@ -46,10 +58,16 @@ export function widgetPayload(w: Widget, iconUrl?: string): Record<string, unkno
       if (!iconUrl && w.app) p.icon = barAppIconUrl(w.app.package);
       break;
     case "PC_CONTROL":
-      // Note: firmware 1.0.1 can't run these on tap (its click handler fails
-      // to read the stored parameter); automations run them fine.
+      // Firmware 1.0.1 can't run these on tap (its click handler fails to
+      // read the stored parameter); 1.0.9 can. 1.0.9 ignores bgColor, which
+      // is why the color is part of the card art.
       if (w.pc) p.param = pcParam(w.pc);
       if (w.bgColor) p.bgColor = w.bgColor;
+      break;
+    case "SCENE":
+      // Firmware 1.0.9 runs the card's own action list. Earlier firmware ran
+      // the stored scene with the same id instead (still sent, see buildPlan).
+      p.param = { type: "ACTION", actions: (w.actions ?? []).map(actionPayload) };
       break;
     case "DEVICE":
       if (w.device) p.type = w.device.deviceType;
@@ -74,13 +92,16 @@ export interface Problem {
   widgetUid?: string;
 }
 
-/** Things that would deploy but not work; shown before deploying. */
-export function findProblems(doc: Doc): Problem[] {
+/** Things that would deploy but not work; shown before deploying.
+ * `triggerTypes` (from the bar's catalog, when loaded) flags automations
+ * whose trigger the bar doesn't offer any more. */
+export function findProblems(doc: Doc, triggerTypes?: string[]): Problem[] {
   const out: Problem[] = [];
   for (const p of doc.profiles) {
     for (const w of p.widgets) {
       const where = `${p.name} › ${w.name}`;
       const at = { profileId: p.id, widgetUid: w.uid };
+      if (isRetired(w)) out.push({ where, message: "The bar no longer has this card, so it's left out. Remove it", ...at });
       if (w.type === "PC_CONTROL" && !pcIsComplete(w.pc)) out.push({ where, message: "Action isn't set up yet", ...at });
       if (w.type === "SCENE" && !w.actions?.length) out.push({ where, message: "Has no actions", ...at });
       if (w.type === "WEATHER" && (!w.weather?.lat || !w.weather?.lon)) out.push({ where, message: "Needs a location", ...at });
@@ -97,6 +118,9 @@ export function findProblems(doc: Doc): Problem[] {
   for (const a of doc.automations) {
     if (a.enabled && !a.triggers.length) out.push({ where: `Automation “${a.name}”`, message: "Has no trigger" });
     if (a.enabled && !a.actions.length) out.push({ where: `Automation “${a.name}”`, message: "Has no actions" });
+    if (a.enabled && triggerTypes?.length && a.triggers.some((t) => !triggerTypes.includes(t.type))) {
+      out.push({ where: `Automation “${a.name}”`, message: "Uses a trigger your bar no longer offers, so it won't run" });
+    }
   }
   return out;
 }
@@ -109,10 +133,12 @@ export interface Plan {
   allowed: unknown[];
 }
 
+/** `iconUrl` serves a card's icon; `cardArtUrl` the full card face of
+ * computer-action and multi-action cards (see `hasCardArt`). */
 export async function buildPlan(
   doc: Doc,
   iconUrl: (w: Widget) => Promise<string | undefined>,
-  sceneArtUrl: (w: Widget) => Promise<string | undefined>,
+  cardArtUrl: (w: Widget) => Promise<string | undefined>,
 ): Promise<Plan> {
   const allowed: unknown[] = [];
   const allowPc = (pc: Widget["pc"]) => {
@@ -124,13 +150,16 @@ export async function buildPlan(
   for (const p of doc.profiles) {
     const widgets: Record<string, unknown>[] = [];
     for (const w of p.widgets) {
-      const url = w.type === "SCENE" ? undefined : await iconUrl(w);
+      if (isRetired(w)) continue;
+      const url = hasCardArt(w) ? await cardArtUrl(w) : await iconUrl(w);
       widgets.push(widgetPayload(w, url));
       if (w.type === "PC_CONTROL") allowPc(w.pc);
       if (w.type === "SCENE") {
         (w.actions ?? []).forEach((a) => allowPc(a.pc));
+        // Firmware before 1.0.9 runs this stored scene when the card is
+        // tapped; on any firmware, automations can run it too.
         scenes.push({
-          id: sceneId(w), name: w.name, icon: (await sceneArtUrl(w)) ?? "", enabled: true, show: true, type: "MANUAL",
+          id: sceneId(w), name: w.name, icon: url ?? "", enabled: true, show: true, type: "MANUAL",
           triggers: [], conditions: [], actions: (w.actions ?? []).map(actionPayload),
         });
       }

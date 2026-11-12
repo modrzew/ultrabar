@@ -1,10 +1,10 @@
 import { create } from "zustand";
-import { ACT, api, errorMessage, on, type AppInfo, type BarStatus, type PcActionEvent, type PushEnvelope } from "./api";
+import { ACT, api, errorMessage, firmwareBefore, on, type AppInfo, type BarStatus, type PcActionEvent, type PushEnvelope } from "./api";
 import type { Automation, Doc, Profile, Widget } from "./model";
 import { uid } from "./model";
 import { PC_ACTIONS, newWidget } from "./widgets";
-import { buildPlan, docHash, fitsOneLine } from "./deploy";
-import { glyphPng, sceneArtPng } from "./icons";
+import { buildPlan, docHash, fitsOneLine, lineSize } from "./deploy";
+import { cardArtPng, glyphPng } from "./icons";
 
 export type View =
   | { kind: "profile"; id: string }
@@ -125,6 +125,8 @@ interface State {
   moveWidget(profileId: string, from: number, to: number): void;
   addAutomation(): string;
 }
+
+const kb = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`;
 
 function defaultDoc(): Doc {
   const id = "profile_" + uid();
@@ -314,9 +316,23 @@ export const useApp = create<State>((set, get) => ({
         async (w) => {
           const fallback = w.type === "PC_CONTROL" && w.pc ? PC_ACTIONS[w.pc.action].glyph : "layers";
           const icon = w.icon?.kind === "url" ? w.icon.url : w.icon?.png ?? (await glyphPng(fallback, "#ffffff"));
-          return publish(await sceneArtPng(w.bgColor ?? "#24252b", icon, w.iconScale));
+          return publish(await cardArtPng(w.bgColor ?? "#24252b", icon, w.iconScale));
         },
       );
+
+      // Firmware 1.0.9 moved the batch scene save to 30500 and accepts an
+      // empty list (which clears removed automations); older firmware didn't.
+      const legacy = firmwareBefore(get().status.bar?.ver, "1.0.9");
+      const scenesAct = legacy ? ACT.saveScenesLegacy : ACT.saveScenes;
+      const sendScenes = plan.scenes.length > 0 || !legacy;
+      // Each message must fit in one line; check before sending anything so
+      // a failed deploy doesn't leave the bar half-updated.
+      if (sendScenes && !fitsOneLine(scenesAct, plan.scenes)) {
+        throw new Error(`Your multi-actions and automations are too large to send in one go (${kb(lineSize(scenesAct, plan.scenes))} of 8 KB). Remove a few actions and try again.`);
+      }
+      if (!fitsOneLine(ACT.saveProfiles, plan.profiles)) {
+        throw new Error(`Your profiles are too large to send in one go (${kb(lineSize(ACT.saveProfiles, plan.profiles))} of 8 KB). Remove a few cards or actions, or shorten long names, commands and text.`);
+      }
 
       if (plan.modules) {
         progress("Sending modules");
@@ -331,31 +347,21 @@ export const useApp = create<State>((set, get) => ({
           });
         }
       }
-      if (plan.scenes.length) {
+      if (sendScenes) {
         progress("Sending actions and automations");
-        if (!fitsOneLine(ACT.saveScenes, plan.scenes)) {
-          throw new Error("Your multi-actions and automations are too large to send in one go. Remove a few actions and try again.");
-        }
-        await api.request(ACT.saveScenes, plan.scenes, 10000);
+        await api.request(scenesAct, plan.scenes, 10000);
       }
       progress("Sending profiles");
-      if (fitsOneLine(ACT.saveProfiles, plan.profiles)) {
-        await api.request(ACT.saveProfiles, plan.profiles, 10000);
-      } else {
-        // Too big for one message: set the profile list, then fill each one.
-        await api.request(ACT.saveProfiles, plan.profiles.map((p) => ({ ...p, widget: [] })), 10000);
-        for (const p of plan.profiles) {
-          if (!fitsOneLine(ACT.saveProfile, p)) throw new Error(`Profile “${p.name}” has more cards than the bar can receive at once. Remove a few and try again.`);
-          await api.request(ACT.saveProfile, p, 10000);
-        }
-      }
+      await api.request(ACT.saveProfiles, plan.profiles, 10000);
       await api.setAllowedActions(plan.allowed);
 
       // The bar keeps showing its previous profile id, which may no longer
-      // exist; show the profile being edited (or the default one).
+      // exist; show the profile being edited (or the default one). Firmware
+      // 1.0.9 also doesn't redraw after a save, so ask it to.
       const view = get().view;
       const showId = view.kind === "profile" ? view.id : (doc.profiles.find((p) => p.isDefault) ?? doc.profiles[0]).id;
       await api.request(ACT.switchProfile, showId).catch(() => {});
+      await api.refreshScreen().catch(() => {});
 
       const serial = get().status.bar?.serialNo;
       const hash = docHash(doc);

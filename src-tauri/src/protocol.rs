@@ -4,6 +4,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 pub mod act {
+    /// Error reply, e.g. for an opcode the bar doesn't know (see `Envelope::unknown_act_for`).
+    pub const ERROR: i64 = 10;
     pub const HEARTBEAT: i64 = 20;
     pub const AUTH: i64 = 100;
     pub const REQUEST_TOKEN: i64 = 101;
@@ -63,6 +65,34 @@ impl Envelope {
         s.push('\n');
         s
     }
+
+    /// Firmware 1.0.9 answers an opcode it doesn't know with
+    /// `{"act":10,"code":200,"id":"<request id> act error"}`. Returns that request id.
+    pub fn unknown_act_for(&self) -> Option<&str> {
+        if self.act != act::ERROR {
+            return None;
+        }
+        self.id.as_deref()?.strip_suffix(" act error")
+    }
+}
+
+/// Parses one line from the bar.
+///
+/// Launcher 1.0.9 sends bar → PC pushes in an internal wrapper that hub 1.0.1
+/// passes through unchanged: `{"target":"CLIENT_REPLY","data":{"payload":"<envelope as
+/// JSON text>",…}}`. The envelope inside is the usual one, so unwrap it.
+pub fn parse_line(line: &str) -> Option<Envelope> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    if v.get("act").is_none()
+        && v.get("target").is_some()
+        && let Some(inner) = v
+            .get("data")
+            .and_then(|d| d.get("payload"))
+            .and_then(|p| p.as_str())
+    {
+        return serde_json::from_str(inner).ok();
+    }
+    serde_json::from_value(v).ok()
 }
 
 fn lenient_id<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
@@ -89,6 +119,35 @@ mod tests {
         assert_eq!(e.id.as_deref(), Some("7"));
         assert!(!e.is_ok());
         assert_eq!(e.message(), "auth_fail");
+    }
+
+    #[test]
+    fn unwraps_pushes_from_launcher_1_0_9() {
+        // Captured from a bar running launcher 1.0.9 with hub 1.0.1.
+        let line = r#"{"data":{"integratedId":"tcp","payload":"{\"act\":1000000,\"data\":{\"payload\":{\"action\":\"execCmd\",\"params\":{\"cmd\":\"echo hi\"}},\"type\":\"PC_CONTROL\"},\"id\":\"sys.push.b8e82d8f\"}","response":true},"target":"CLIENT_REPLY"}"#;
+        let e = parse_line(line).unwrap();
+        assert_eq!(e.act, act::PUSH);
+        assert_eq!(e.id.as_deref(), Some("sys.push.b8e82d8f"));
+        let data = e.data.unwrap();
+        assert_eq!(data["type"], "PC_CONTROL");
+        assert_eq!(data["payload"]["params"]["cmd"], "echo hi");
+    }
+
+    #[test]
+    fn parses_plain_lines_unchanged() {
+        let e = parse_line(r#"{"act":1000000,"code":200,"id":"sys.push.1","data":{"type":"PC_CONTROL","payload":{}}}"#).unwrap();
+        assert_eq!(e.act, act::PUSH);
+        let e = parse_line(r#"{"act":30102,"code":200,"data":{"netId":32},"id":"576b"}"#).unwrap();
+        assert_eq!(e.act, 30102);
+        assert!(parse_line("not json").is_none());
+    }
+
+    #[test]
+    fn recognises_unknown_opcode_replies() {
+        let e = parse_line(r#"{"act":10,"code":200,"id":"17 act error","timestamp":1}"#).unwrap();
+        assert_eq!(e.unknown_act_for(), Some("17"));
+        let e = parse_line(r#"{"act":1103,"code":-1,"id":"19","msg":"profile id error"}"#).unwrap();
+        assert_eq!(e.unknown_act_for(), None);
     }
 
     #[test]

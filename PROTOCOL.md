@@ -459,3 +459,48 @@ Verified against the live bar unless marked **[code]** (read from `launch.apk`/`
 
 ## Storage
 The launcher keeps everything in `/data/data/com.ultrabar.launch/shared_prefs/my_preferences.xml` as fastjson with `@type` tags (readable over the open ADB port).
+
+---
+
+# Firmware 1.0.9 (2026-11-12)
+
+The bar's 1.0.9 update replaced only the launcher (`com.ultrabar.launch` 1.0.1 → 1.0.9). `com.ultrabar.hub` (TLS, framing, pairing, auth) is byte-identical, so the transport, `act 100/101` and the heartbeat are unchanged. The update did **clear all pairings**: every client has to pair again. Verified live unless marked **[code]** (read from the 1.0.9 `launch.apk`).
+
+## Opcodes
+The `TCPMessage` enum became `MessageAction` with a handler map (`MessageFactory`). Compared with 1.0.1:
+- **Removed:** `1050–1052` (image get/set), `1101` (save one profile), `1400–1402` (downloads), `5010–5037` (report data, hotkey groups, fast actions), `30800` (metrics).
+- **Moved:** the batch scene save is now **`30500`** (`30501` is gone; on 1.0.1, `30500` saved a single scene). The batch save still replaces all scenes, and now accepts an empty list.
+- **Renamed:** `30300` is `SET_GATEWAY_CONFIG`. Same payload, but it now **destroys every module missing from the list** (`GatewayConfigWrite.clearDevice`) **[code]**.
+- **New:** `30104` (gateway pairing result), `30730` (module online state, `["<uid>",…]` → `[{serialNo, online}]`), `30740`/`30741` (read/write bar settings via `{type: BASE_SET|GATEWAY_CONFIG|APP_LIST, …}`) **[code]**, `30742` (screensaver preview), `30750–30752` (app capability actions/params/options).
+- `30100` takes `"mesh"` to scan wireless modules; anything else scans the pogo-pin (CAN) bus. Discovery events (`30102`) arrive in the normal envelope.
+- `1103` now fails with `msg:"profile id error"` for an unknown profile id.
+- **Unknown opcodes** get `{"act":10,"code":200,"id":"<request id> act error"}`. The id doesn't match the request's, so match on the `" act error"` suffix or the request just times out.
+
+## Bar → PC pushes
+The launcher wraps pushes in an internal envelope that hub 1.0.1 doesn't know (`Target.CLIENT_REPLY`), so it forwards the wrapper as is. The real message is JSON text in `data.payload`:
+```json
+{"data":{"integratedId":"tcp","payload":"{\"act\":1000000,\"data\":{\"payload\":{\"action\":\"execCmd\",\"params\":{\"cmd\":\"…\"}},\"type\":\"PC_CONTROL\"},\"id\":\"sys.push.…\"}","response":true},"target":"CLIENT_REPLY"}
+```
+No top-level `act` or `id`. Reply to the inner envelope as before (`act 1000000`, its `id`, `code 200`); the launcher waits 5 s for that ack **[code]**. A future hub update may forward the inner message directly, so accept both forms. `PushType` also gained `METRIC`, `MODULE_STATE` and `CPU/MEMORY/STORAGE/NETWORK` **[code]**.
+
+## Widgets (`1108`)
+- `WidgetType` dropped `COMPUTER_INFO`, `HOT_KEY` and **`SET`**; unknown types render as an "unsupported widget" card ("Not available"). Added `CPU`, `MEMORY`, `STORAGE`, `NETWORK`, `HOT_KEY_GROUP`, `PC_BOOT`, `SENSE_CUBE*`.
+- Params now go through per-type converters (`WidgetCoverRegistry`). `PC_CONTROL` cards are **fixed**: tapping runs the action. They **ignore `bgColor`**; the icon (`getScaledBitmap(265, 265, icon, iconScale/100)` after trimming transparent borders) is all there is, so this app sends a full-card image (520×480, color + symbol) with `iconScale: 100`.
+- **`SCENE` (multi-action) cards run their own `param`**: `{"type":"ACTION","actions":[ActionConfig,…]}` (also `HA_SCENE`, `LOCAL_SCENE`, which does nothing on tap). The card art is the widget's own `icon`, and the name is printed at the top. Without a `param` the card is blank and inert.
+- `SOUNDSCAPE` reads `param.id`; sounds now come from a `com.ultrabar.whitenoise` content provider. The update didn't install that app, so the card shows only ▶ and the bar offers no soundscape actions.
+
+## Screen refresh
+After `1108` the launcher no longer redraws the home screen, and `1103` is ignored when the requested profile is already current (also right after a launcher restart, when the current profile is the default one). A redeploy of the visible profile therefore leaves the old cards on screen. `POST :8080/upload/zip` is back (multipart `file` = a `.zip`, query `subDir`, `isFull`) and always triggers a full home-screen reload. **Always pass `subDir`**: `isFull` defaults to `true` and empties the target folder, which without `subDir` is the launcher's whole asset folder. This app uploads an empty zip to `subDir=ultrabar-app&isFull=false` after each deploy (reply `{"msg":"ok","data":0,"state":200}`).
+
+## Action catalog (`1205`)
+- Root gains `PLUGIN_WIDGET` (no action behind it) and a stray `{"id":"corebar.volume", …}` slider with no name or type (a launcher bug).
+- `sc.corebar` → `BRIGHT` (id now `corebar`, was `bright`) and new `VOLUME` (id `corebar`, value `corebar.volume`, 1–100).
+- `sc.other` → `ACTIVITY`, `SOUND_SCAPE` (only with the whitenoise app) and `APP_CAPABILITY` (only with plugin apps). **Timer is no longer listed** (the method exists but isn't called), yet `TimerAction` still runs: `{id:"timer", type:"TIMER", values:[{id:"1", value:<timer widget id>}, {id:"2", value:"START|PAUSE|RESUM|CANCEL|RESTART"}]}` works from multi-action cards and automations.
+- `sc.devices` adds `sc.devices.vivo`, `sc.devices.pcboot`.
+- Actions still dispatch on `type` and component ids, so actions saved with the 1.0.1 node ids keep working.
+
+## Triggers (`30700`)
+`NUMERIC` is gone. `DEVICE_STATE` takes `id`, `property`, `from`, `to`.
+
+## Apps (`1000`)
+Now lists installed apps by type (`data` = `"ALL"` default, `"APP"`, `"SCREENSAVER"`). Items add `screensaver` and `configBtnName`; screensavers and Home Assistant come with `allowProfile: false`. On this bar: Calculator, Alarmclock and the StellarRing screensaver. `1002` with `""` now returns a `sys.widget.apps` node.

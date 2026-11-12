@@ -16,6 +16,7 @@ export function useNow(ms = 10_000) {
 }
 
 export function cardIssue(w: Widget): string | null {
+  if (w.type === "SET") return "No longer available on the bar";
   if (w.type === "PC_CONTROL" && !pcIsComplete(w.pc)) return "Action isn't set up yet";
   if (w.type === "SCENE" && !w.actions?.length) return "Add at least one action";
   if (w.type === "WEATHER" && (!w.weather?.lat || !w.weather?.lon)) return "Choose a location";
@@ -159,6 +160,8 @@ function IconFace({ w }: { w: Widget }) {
       ) : (
         <Fallback size={size} strokeWidth={1.6} color="rgba(255,255,255,0.9)" />
       )}
+      {/* The bar prints the name over the art: multi-actions at the top, computer actions at the bottom. */}
+      {w.name && <div className={`card-label truncate${w.type === "SCENE" ? " top" : ""}`}>{w.name}</div>}
     </div>
   );
 }

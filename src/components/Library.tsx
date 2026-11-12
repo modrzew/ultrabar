@@ -52,7 +52,7 @@ export function Library({ profileId }: { profileId: string }) {
 
   const groups = useMemo(() => {
     const g: { title: string; items: LibItem[]; note?: string }[] = [
-      { title: "Essentials", items: [basic("TIME"), basic("WORLD_TIME"), basic("WEATHER"), basic("TIMER"), basic("SOUNDSCAPE"), basic("SET")] },
+      { title: "Essentials", items: [basic("TIME"), basic("WORLD_TIME"), basic("WEATHER"), basic("TIMER"), basic("SOUNDSCAPE")] },
       {
         title: "This computer",
         items: [

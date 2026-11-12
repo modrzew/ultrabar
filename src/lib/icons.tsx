@@ -61,10 +61,11 @@ export async function imageFilePng(file: File): Promise<string> {
   }
 }
 
-/** Full-card artwork for multi-action cards. The bar shows a scene's `icon`
- * as the whole card background, so we paint the card color and the symbol,
- * trimmed and scaled the way the bar sizes computer-action icons. */
-export async function sceneArtPng(bg: string, iconPng: string | null, scalePct: number): Promise<string> {
+/** Full card face for computer-action and multi-action cards (520×480, the
+ * card's proportions): the card color with the symbol trimmed and centered at
+ * `scalePct` of the height. Firmware 1.0.9 ignores card colors, so the color
+ * has to be part of the image; the bar scales it to fill the card. */
+export async function cardArtPng(bg: string, iconPng: string | null, scalePct: number): Promise<string> {
   const W = 520, H = 480;
   const c = document.createElement("canvas");
   c.width = W;

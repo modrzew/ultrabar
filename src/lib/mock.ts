@@ -1,5 +1,5 @@
 // In-browser stand-in for the Rust backend, used only when the UI runs outside
-// Tauri. Replies mirror what a real bar (firmware 1.0.1) returned.
+// Tauri. Replies mirror what a real bar (firmware 1.0.9) returned.
 import type { BarStatus, FoundBar } from "./api";
 
 type Listener = (p: unknown) => void;
@@ -15,7 +15,7 @@ export async function listen(event: string, cb: Listener) {
   return () => listeners.get(event)!.delete(cb);
 }
 
-const BAR: FoundBar = { serialNo: "5001G26071XS0016", ip: "192.168.1.175", tcpPort: 7431, name: "ultrabar", ver: "1.0.1(1)" };
+const BAR: FoundBar = { serialNo: "5001G26071XS0016", ip: "192.168.1.175", tcpPort: 7431, name: "ultrabar", ver: "1.0.9(9)" };
 const paired = () => localStorage.getItem("mock.paired") === "1";
 
 let status: BarStatus = paired()
@@ -34,13 +34,16 @@ const tree: Record<string, unknown[]> = {
     { components: [{ id: "1", inputType: "INT", max: 300, min: 1, name: "", uiType: "INPUT", unit: "second" }], id: "sc.delay", last: true, name: "Delay", objectName: "", type: "DELAY" },
     { components: [{ id: "1", inputType: "STR", name: "", options: [{ label: "Default Profile", value: "profile_2" }], uiType: "SELECT" }], id: "profile", last: true, name: "Switch Profile", objectName: "Corebar", type: "CHANGE_PROFILE" },
     { id: "1", last: true, name: "PC Control", objectName: "Corebar", type: "PC_CONTROL" },
+    { id: "1", last: true, name: "Plugin", objectName: "Corebar", type: "PLUGIN_WIDGET" },
     { id: "sc.corebar", last: false, name: "CoreBar" },
+    { id: "corebar.volume", inputType: "INT", max: 100, min: 1, name: "", uiType: "SEEKBAR" },
     { id: "sc.devices", last: false, name: "Device" },
     { id: "scene", last: false, name: "Scene" },
     { id: "sc.other", last: false, name: "Other", objectName: "" },
   ],
   "sc.corebar": [
-    { components: [{ id: "corebar.bright", inputType: "INT", max: 100, min: 1, name: "", uiType: "SEEKBAR" }], id: "bright", last: true, name: "Screen Brightness", objectName: "Corebar", type: "BRIGHT" },
+    { components: [{ id: "corebar.bright", inputType: "INT", max: 100, min: 1, name: "", uiType: "SEEKBAR" }], id: "corebar", last: true, name: "Screen Brightness", objectName: "Corebar", type: "BRIGHT" },
+    { components: [{ id: "corebar.volume", inputType: "INT", max: 100, min: 1, name: "", uiType: "SEEKBAR" }], id: "corebar", last: true, name: "Volume", objectName: "Corebar", type: "VOLUME" },
   ],
   "sc.other": [
     { components: [{ id: "1", inputType: "STR", name: "", options: [], uiType: "SELECT" }], id: "activity", last: true, name: "App Start", objectName: "App", type: "ACTIVITY" },
@@ -55,16 +58,6 @@ const tree: Record<string, unknown[]> = {
         { label: "Serenade of Droplets", value: "sys.app.soundscape.7" },
       ] }],
       id: "sound", last: true, name: "Soundscape", objectName: "Soundscape", type: "SOUND_SCAPE",
-    },
-    {
-      components: [
-        { id: "1", inputType: "STR", name: "定时器", uiType: "INPUT" },
-        { id: "2", inputType: "STR", name: "动作", uiType: "SELECT", options: [
-          { label: "启动", value: "START" }, { label: "暂停", value: "PAUSE" }, { label: "恢复暂停", value: "RESUM" },
-          { label: "取消", value: "CANCEL" }, { label: "重启", value: "RESTART" },
-        ] },
-      ],
-      id: "sound", last: true, name: "Timer", objectName: "Timer", type: "TIMER",
     },
   ],
   "sc.devices": [
@@ -90,12 +83,6 @@ const triggers = {
       { dataSource: { act: 30720 }, dataType: "STRING", key: "package", label: "应用", required: true, uiType: "SELECT" },
       { dataSource: { act: 30721 }, dataType: "STRING", key: "in", label: "在", required: true, uiType: "SELECT" },
     ] },
-    { type: "NUMERIC", name: "数值状态", params: [
-      { dataSource: { act: 30701 }, dataType: "STRING", key: "id", label: "设备", required: true, uiType: "SELECT" },
-      { dataSource: { act: 30702, dependsOn: ["id"] }, dataType: "STRING", key: "property", label: "状态属性", required: true, uiType: "SELECT" },
-      { dataType: "STRING", key: "above", label: "大于", required: true, uiType: "INPUT" },
-      { dataType: "STRING", key: "below", label: "小于", required: true, uiType: "INPUT" },
-    ] },
   ],
   conditions: [],
 };
@@ -115,6 +102,9 @@ async function request(act: number, data: unknown): Promise<unknown> {
     case 30700: return triggers;
     case 30710: return [{ label: "Default Profile", value: "profile_2", last: true }];
     case 30721: return [{ label: "前台", value: "true", last: true }, { label: "后台", value: "false", last: true }];
+    case 1103: case 1108: case 30500: case 30300: case 1010: return "ok";
+    // Removed in firmware 1.0.9; the real bar replies with an unmatched error.
+    case 1101: case 30501: throw { code: -5, message: `The bar doesn't support this request (act ${act}). Its firmware may be newer or older than this app expects.` };
     case 30100:
       setTimeout(() => emit("bar-push", { act: 30102, code: 200, data: { uid: "4097", productId: "DOT_KEY", serialNumber: "DK01A2234", name: "Dot Key", netId: 3, workMode: 0 } }), 1800);
       return null;
@@ -147,7 +137,7 @@ export async function invoke(cmd: string, args: Record<string, unknown> = {}): P
     case "load_doc": { const d = localStorage.getItem("mock.doc"); return d ? JSON.parse(d) : null; }
     case "save_doc": localStorage.setItem("mock.doc", JSON.stringify(args.doc)); return;
     case "publish_icon": return "http://192.168.1.20:47215/i/mock.png";
-    case "set_allowed_actions": case "set_pc_agent_enabled": case "test_pc_action": return;
+    case "set_allowed_actions": case "set_pc_agent_enabled": case "test_pc_action": case "refresh_bar_screen": return;
     default: throw new Error(`mock: unknown command ${cmd}`);
   }
 }

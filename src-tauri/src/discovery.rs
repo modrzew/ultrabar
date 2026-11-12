@@ -71,6 +71,27 @@ fn parse_reply(buf: &[u8], from: SocketAddr) -> Option<FoundBar> {
     })
 }
 
+/// Ask one address directly and return its reply as soon as it arrives, or
+/// `None` after `timeout`. Used before connecting, to keep the stored
+/// firmware version and command port current.
+pub async fn probe(ip: Ipv4Addr, timeout: Duration) -> Option<FoundBar> {
+    let sock = make_socket().ok()?;
+    let deadline = Instant::now() + timeout;
+    let mut buf = [0u8; 4096];
+    while Instant::now() < deadline {
+        let _ = sock.send_to(PROBE, (ip, DISCOVERY_PORT)).await;
+        let wake = deadline.min(Instant::now() + Duration::from_millis(250));
+        while let Ok(Ok((n, from))) = tokio::time::timeout_at(wake, sock.recv_from(&mut buf)).await {
+            if from.ip() == std::net::IpAddr::V4(ip)
+                && let Some(bar) = parse_reply(&buf[..n], from)
+            {
+                return Some(bar);
+            }
+        }
+    }
+    None
+}
+
 /// Probe the network (and any explicit addresses) for `timeout`, re-sending
 /// every 700 ms. Returns bars de-duplicated by serial number.
 pub async fn discover(timeout: Duration, extra: &[Ipv4Addr]) -> std::io::Result<Vec<FoundBar>> {

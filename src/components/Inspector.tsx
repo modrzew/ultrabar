@@ -89,7 +89,7 @@ function Body({ w, set }: { w: Widget; set: Setter }) {
     case "TIME":
       return <Note>Shows the date and time in the bar's time zone. Nothing to set up.</Note>;
     case "SET":
-      return <Note>Opens the bar's own settings (brightness, sound, Wi‑Fi) when tapped.</Note>;
+      return <Note>Bar firmware 1.0.9 removed this card, so it isn't sent to the bar any more. You can delete it.</Note>;
     case "WORLD_TIME":
       return (
         <div className="stack" style={{ gap: 16 }}>
@@ -126,7 +126,7 @@ function Body({ w, set }: { w: Widget; set: Setter }) {
         <div className="stack" style={{ gap: 0 }}>
           <div className="panel-section">
             <FirmwareNote />
-            <NameField w={w} set={set} hint="For your reference; the bar shows the icon." />
+            <NameField w={w} set={set} hint="Shown at the bottom of the card." />
             <PcControlEditor value={w.pc!} onChange={(pc, key) => changePc(w, pc, set, key)} />
           </div>
           <div className="panel-section">
@@ -140,7 +140,7 @@ function Body({ w, set }: { w: Widget; set: Setter }) {
         <div className="stack" style={{ gap: 0 }}>
           <div className="panel-section">
             <FirmwareNote />
-            <NameField w={w} set={set} />
+            <NameField w={w} set={set} hint="Shown at the top of the card." />
             <Field label="Actions" hint="Run top to bottom when you tap the card.">
               <ActionList actions={w.actions ?? []} onChange={(actions) => set((x) => { x.actions = actions; })} />
             </Field>

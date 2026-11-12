@@ -75,6 +75,8 @@ export const api = {
   forget: () => call<void>("forget_bar"),
   request: <T = unknown>(act: number, data?: unknown, timeoutMs?: number) =>
     call<T>("bar_request", { act, data, timeoutMs }),
+  /** Redraws the bar's home screen; firmware 1.0.9 doesn't after a profile save. */
+  refreshScreen: () => call<void>("refresh_bar_screen"),
   loadDoc: () => call<Doc | null>("load_doc"),
   saveDoc: (doc: Doc) => call<void>("save_doc", { doc }),
   setAllowedActions: (actions: unknown[]) => call<void>("set_allowed_actions", { actions }),
@@ -88,11 +90,22 @@ export async function on<T>(event: string, cb: (payload: T) => void): Promise<Un
   return (await mock()).listen(event, cb as (p: unknown) => void);
 }
 
+/** True when the bar reports a firmware version (e.g. "1.0.9(9)") older than
+ * `min` ("1.0.9"). Unknown versions count as current. */
+export function firmwareBefore(ver: string | null | undefined, min: string): boolean {
+  const parse = (v: string) => v.replace(/\(.*$/, "").split(".").map((n) => parseInt(n, 10) || 0);
+  if (!ver) return false;
+  const a = parse(ver), b = parse(min);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) < (b[i] ?? 0);
+  }
+  return false;
+}
+
 /** Opcodes used by the UI (see PROTOCOL.md). */
 export const ACT = {
   getAppList: 1000,
   getComponents: 1002,
-  saveProfile: 1101,
   switchProfile: 1103,
   saveProfiles: 1108,
   actionTree: 1205,
@@ -102,7 +115,10 @@ export const ACT = {
   moduleDiscoveryStop: 30101,
   moduleDiscovered: 30102,
   coreBarConfig: 30300,
-  saveScenes: 30501,
+  /** Replaces all scenes (firmware 1.0.9+). */
+  saveScenes: 30500,
+  /** The same before 1.0.9, where 30500 saved a single scene. */
+  saveScenesLegacy: 30501,
   triggerCatalog: 30700,
   profileList: 30710,
 } as const;

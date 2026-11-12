@@ -3,6 +3,7 @@ mod discovery;
 mod icons;
 mod pc_agent;
 mod protocol;
+mod screen;
 mod store;
 mod tls;
 
@@ -145,6 +146,20 @@ async fn bar_request(
     conn.request(act, data, timeout).await
 }
 
+/// Make the bar redraw its home screen (best effort; see `screen`).
+#[tauri::command]
+async fn refresh_bar_screen(state: State<'_, AppState>) -> Result<(), String> {
+    let ip = state
+        .status
+        .lock()
+        .unwrap()
+        .bar
+        .as_ref()
+        .map(|b| b.ip.clone())
+        .ok_or("No bar selected")?;
+    screen::reload_home_screen(&ip).await
+}
+
 #[tauri::command]
 fn load_doc(state: State<'_, AppState>) -> Option<Value> {
     state.store.load_doc()
@@ -271,6 +286,7 @@ pub fn run() {
             reconnect_bar,
             forget_bar,
             bar_request,
+            refresh_bar_screen,
             load_doc,
             save_doc,
             set_allowed_actions,
