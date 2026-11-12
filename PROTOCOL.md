@@ -408,3 +408,54 @@ Two paths: the HTTP zip (section 9) **or** `act 1051/1052 SET_SCENE_IMAGE(_V2)` 
 
 ## Live reads captured (bar is in near-factory state)
 `GET_APP_LIST`=[], `GET_PROFILE_COMPONENT`=[], `GET_DEVICE`=[], plus the scene/trigger catalogs in the earlier section. So this bar has profiles configured but no apps/IoT devices/modules bound.
+
+---
+
+# Findings while building the Tauri app (2026-11-12, firmware 1.0.1(1))
+
+Verified against the live bar unless marked **[code]** (read from `launch.apk`/`hub.apk` bytecode).
+
+## Catalogs
+- `1002` with `""` lists only **installed apps and bound IoT devices** (both empty on a bare bar). Built-in widgets (clock, weather, …) aren't in it; a configurator needs its own palette.
+- `1205` leaf ids aren't unique: Soundscape and Timer both use `id:"sound"`. Match on `id` + `type`. The `scene` branch lists stored scenes (`local.scene`, option per scene id).
+- Dependent dropdown acts take objects: `30702` → `{"id": …}`, `30703` → `{"id": …, "property": …}`. `30721` returns foreground/background (`"true"`/`"false"`).
+- `1010` only accepts `com.ultrabar.weather` (`{apiKey, metric, language}`) and `com.ultrabar.homeassistant` (`{url, token}`) **[code]**.
+
+## Widget payloads (`1108`/`1101`), confirmed by the launcher's converters and holders **[code]**
+| type | what the bar reads |
+|---|---|
+| `TIME` | nothing; double-width card |
+| `WORLD_TIME` | `name` (label), `param.offset` = `"GMT+5:30"` / `"GMT-3:00"` / `"GMT+0:00"`. **Must contain `:`** (parsed by `substring`). Fixed offset, no DST. Analog clock face. |
+| `TIMER` | `name`, `param.time` = `"HH:MM:SS"`; the widget `id` is what `TIMER` scene actions reference |
+| `WEATHER` | `param.lat`, `param.lon` (strings) |
+| `SOUNDSCAPE` | the widget **`id` must be the sound id** (`sys.app.soundscape.N`); `param` is ignored |
+| `APPS` | the widget **`id` is the package name** |
+| `SCENE` | the widget `id` is a scene id from `30500/30501`; tap → run that scene |
+| `SET` | the bar's settings panel |
+| `PC_CONTROL` | `param = {output:10, payload:{action, params}}` (relayed to PCs) or `{output:5, keys:[…]}` (typed by the bar), `bgColor`, `icon`, `iconScale` |
+- Hotkey `keys` are **USB HID usage IDs** (a=4 … z=29, 1..0=30..39, Enter=40, F1=58, modifiers 224–231). The hub writes them to `/dev/hidg0`, so the bar types them as a USB keyboard.
+- `ProfileDTO` needs a non-empty `id` and a non-null `widget` array. Sending both `isDefault` and `default` is safe.
+- **After `1108` the bar keeps its previous active profile id**, which may no longer exist → it shows "Please go to the software configuration to add widget." Send `1103 <profileId>` after deploying.
+
+## Icons
+- This firmware has **no `/upload/zip` route** (404). `8080` only serves `POST /upload?serialNo=` (module `.tgz`) and `GET /widget/icon`.
+- Cards load icons with Picasso: `http(s)://`, `file://`, `file:///android_asset/…` work, `data:` URIs don't.
+- Built-in icons: `http://<bar>:8080/widget/icon?id=<id>&type=<TYPE>&scheme=<n>` with scheme `ID=1, HOME_TYPE=20, APPLICATION=30, PLAYER=50` (apps: `type=application&scheme=30`).
+- The app serves custom PNGs from its own LAN HTTP server (content-hashed URLs, long cache headers) and deploys those URLs.
+
+## Scenes (multi-action, automations)
+- `30501` (batch) **replaces all scenes**. `Scene = {id, name, icon, enabled, show, type: MANUAL|AUTO|MODULE, triggers:[{type, params:{key:value}}], conditions:[], actions:[ActionConfig]}`.
+- `ActionConfig = {id: <1205 node id>, name, type, objectParams?, values:[{id: <component id>, value}]}`. PC control action: `{id:"1", type:"PC_CONTROL", values:[{id:"1", value:{output, payload|keys}}]}`.
+- A `SCENE` card shows the scene's `icon` as its full background **only if the scene id starts with `sys.scene`**; otherwise it shows a stock photo **[code]**.
+
+## Bar → PC push (`act 1000000`)
+- Broadcast to every connected client: `{"act":1000000,"code":200,"id":"sys.push.<uuid>","data":{"type":"PC_CONTROL","payload":{"action":"execCmd","params":{"cmd":"…"}}}}`. Verified with an automation.
+- This firmware only pushes `PC_CONTROL`, `ULTRA_KEY`, `ULTRA_KEY_SET`. Nothing on the bar consumes metrics (`30800`), so the CPU/RAM widgets of the PC app have no effect here **[code]**.
+
+## Firmware bugs (1.0.1)
+- **Tapping a `PC_CONTROL` card fails**: the click handler calls `ParentControlParameter.from(param)`, which only accepts a raw `JSONObject`, but the stored param is a typed `ControlParamter` (fastjson `@type`). NPE, nothing happens. This affects hotkey cards too.
+- **Tapping a local scene card fails**: `ExecuteSceneEvent` calls `SceneManager.startScene(id, null)`, and `Scene.execute` calls `callback.onStart` without a null check. The scene also stays marked "executing".
+- Automations (`AUTO` scenes) run actions correctly, including PC control.
+
+## Storage
+The launcher keeps everything in `/data/data/com.ultrabar.launch/shared_prefs/my_preferences.xml` as fastjson with `@type` tags (readable over the open ADB port).

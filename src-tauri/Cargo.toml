@@ -1,11 +1,9 @@
 [package]
 name = "ultrabar"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Configure and control an UltraBar X display bar"
+authors = ["Tomek Modrzynski"]
 edition = "2024"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -20,9 +18,20 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
+tokio = { version = "1", features = ["net", "io-util", "time", "sync", "macros", "rt-multi-thread", "process", "fs"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+socket2 = { version = "0.6", features = ["all"] }
+if-addrs = "0.15"
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+base64 = "0.22"
+gethostname = "1"
+thiserror = "2"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
