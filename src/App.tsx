@@ -95,7 +95,7 @@ function TitleBar() {
     : "Settings";
   return (
     <header className={`titlebar${isMac ? " mac" : ""}`} data-tauri-drag-region>
-      <span className="title" data-tauri-drag-region>UltraBar</span>
+      <span className="title" data-tauri-drag-region>ultrabar</span>
       <span className="crumb" data-tauri-drag-region>/ {crumb}</span>
       <div className="spacer" data-tauri-drag-region />
       <DeployButton />

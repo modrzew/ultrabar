@@ -3,8 +3,8 @@
 <plist version="1.0">
 <dict>
   <key>NSLocalNetworkUsageDescription</key>
-  <string>UltraBar finds and controls your UltraBar display on the local network.</string>
+  <string>ultrabar finds and controls your UltraBar display on the local network.</string>
   <key>NSAppleEventsUsageDescription</key>
-  <string>UltraBar types text on this Mac when you tap a “Type text” card on your bar.</string>
+  <string>ultrabar types text on this Mac when you tap a “Type text” card on your bar.</string>
 </dict>
 </plist>

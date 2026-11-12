@@ -141,7 +141,7 @@ async fn type_text(text: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "macOS refused to type text. Allow UltraBar under System Settings › Privacy & Security › Accessibility. ({})",
+            "macOS refused to type text. Allow ultrabar under System Settings › Privacy & Security › Accessibility. ({})",
             String::from_utf8_lossy(&out.stderr).trim()
         ))
     }

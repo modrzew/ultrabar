@@ -568,9 +568,9 @@ fn pair_payload(app: &AppHandle) -> Value {
         .trim_end_matches(".local")
         .to_string();
     let name = if host.is_empty() {
-        "UltraBar app".to_string()
+        "ultrabar app".to_string()
     } else {
-        format!("UltraBar · {host}")
+        format!("ultrabar · {host}")
     };
     json!({ "name": name, "id": client_id })
 }

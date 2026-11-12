@@ -62,7 +62,7 @@ export function PcControlEditor({ value, onChange }: { value: PcControl; onChang
         </Field>
       )}
       {value.action === "inputText" && (
-        <Field label="Text to type" hint={isMac ? "macOS will ask to allow UltraBar under Accessibility the first time." : undefined}>
+        <Field label="Text to type" hint={isMac ? "macOS will ask to allow ultrabar under Accessibility the first time." : undefined}>
           <textarea className="textarea" rows={3} placeholder="Thanks, talk soon!" value={value.text ?? ""}
             onChange={(e) => onChange({ ...value, text: e.target.value }, "text")} />
         </Field>

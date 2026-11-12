@@ -89,7 +89,7 @@ jobs:
 
       - name: Check the signature
         run: |
-          app=src-tauri/target/aarch64-apple-darwin/release/bundle/macos/UltraBar.app
+          app=src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ultrabar.app
           codesign --verify --strict "$app"
           requirement=$(codesign --display --requirements - "$app" 2>&1)
           echo "$requirement"
@@ -105,9 +105,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           bundle=src-tauri/target/aarch64-apple-darwin/release/bundle
-          archive="UltraBar_${TAG#v}_aarch64.app.tar.gz"
-          mv "$bundle/macos/UltraBar.app.tar.gz" "$bundle/macos/$archive"
-          mv "$bundle/macos/UltraBar.app.tar.gz.sig" "$bundle/macos/$archive.sig"
+          archive="ultrabar_${TAG#v}_aarch64.app.tar.gz"
+          mv "$bundle/macos/ultrabar.app.tar.gz" "$bundle/macos/$archive"
+          mv "$bundle/macos/ultrabar.app.tar.gz.sig" "$bundle/macos/$archive.sig"
           gh release upload "$TAG" "$bundle"/dmg/*.dmg "$bundle/macos/$archive" "$bundle/macos/$archive.sig" --clobber
           echo "signature=$(cat "$bundle/macos/$archive.sig")" >> "$GITHUB_OUTPUT"
 
@@ -144,7 +144,7 @@ jobs:
       - run: bun install --frozen-lockfile
       # The NSIS installer is both the download and, with its signature, the update package.
       # It installs for the current user, and an update reinstalls over the same folder, so
-      # Windows Firewall's "allow" for UltraBar carries over.
+      # Windows Firewall's "allow" for ultrabar carries over.
       - run: bun tauri build --target x86_64-pc-windows-msvc --bundles nsis
 
       - name: Attach the installer and its signature to the release
@@ -153,7 +153,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           nsis=src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis
-          installer="UltraBar_${TAG#v}_x64-setup.exe"
+          installer="ultrabar_${TAG#v}_x64-setup.exe"
           gh release upload "$TAG" "$nsis/$installer" "$nsis/$installer.sig" --clobber
           echo "signature=$(cat "$nsis/$installer.sig")" >> "$GITHUB_OUTPUT"
 
@@ -180,12 +180,12 @@ jobs:
               '.[$key] = {url: $url, signature: $signature}' <<< "$platforms")
           }
           if [ -n "$MACOS_SIGNATURE" ]; then
-            add darwin-aarch64 "UltraBar_${version}_aarch64.app.tar.gz" "$MACOS_SIGNATURE"
+            add darwin-aarch64 "ultrabar_${version}_aarch64.app.tar.gz" "$MACOS_SIGNATURE"
           else
             echo "::warning::No macOS build, so Macs won't be offered $TAG"
           fi
           if [ -n "$WINDOWS_SIGNATURE" ]; then
-            add windows-x86_64 "UltraBar_${version}_x64-setup.exe" "$WINDOWS_SIGNATURE"
+            add windows-x86_64 "ultrabar_${version}_x64-setup.exe" "$WINDOWS_SIGNATURE"
           else
             echo "::warning::No Windows build, so Windows PCs won't be offered $TAG"
           fi

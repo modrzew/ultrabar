@@ -153,7 +153,7 @@ export function SettingsView() {
         </section>
 
         <p className="faint" style={{ fontSize: 12, margin: 0 }}>
-          UltraBar {info?.version} · {info?.hostname}
+          ultrabar {info?.version} · {info?.hostname}
         </p>
       </div>
     </div>

@@ -71,7 +71,7 @@ export function UpdateDialog({ version, onClose }: { version: string; onClose: (
       onClose={busy ? () => {} : onClose}
       footer={
         <>
-          <span className="faint grow" style={{ fontSize: 12 }}>UltraBar restarts into the new version.</span>
+          <span className="faint grow" style={{ fontSize: 12 }}>ultrabar restarts into the new version.</span>
           <Button onClick={onClose} disabled={busy}>Later</Button>
           <Button variant="primary" onClick={() => void install()} disabled={busy}>
             {busy && <Spinner />}
