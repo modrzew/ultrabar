@@ -241,7 +241,7 @@ If `config` is true, the official app shows a "Web UI" button that opens `http:/
 
 ## 10. Cloud endpoints (optional, not needed for local control)
 
-The app also calls `https://gatewayssl.dev.aiks360.com/api/v1/base-service/pub/...` for the app/plugin store and icon library. Note the `dev` host in a release build. You don't need any of it to configure the bar.
+The app also calls `https://gatewayssl.dev.aiks360.com/api/v1/base-service/pub/...` for the app/plugin store and icon library. Note the `dev` host in a release build. You don't need any of it to configure the bar. The store parts are described in "App and plugin store" at the end.
 
 ## 11. Open questions for a live bar
 
@@ -504,3 +504,26 @@ After `1108` the launcher no longer redraws the home screen, and `1103` is ignor
 
 ## Apps (`1000`)
 Now lists installed apps by type (`data` = `"ALL"` default, `"APP"`, `"SCREENSAVER"`). Items add `screensaver` and `configBtnName`; screensavers and Home Assistant come with `allowProfile: false`. On this bar: Calculator, Alarmclock and the StellarRing screensaver. `1002` with `""` now returns a `sys.widget.apps` node.
+
+# App and plugin store (2026-11-12)
+
+Verified against the live bar (launcher 1.0.9) and the vendor's API unless marked **[code]**.
+
+## Catalog (anonymous, no login)
+Base: `https://gatewayssl.dev.aiks360.com/api/v1/base-service/pub/`. Replies are `{state, msg, data: {current, size, total, records: [...]}}`.
+- **Bar apps:** `POST apps/100/fetchListV2`, body `{"pi": 1, "ps": 50}`. `100` is the `appType` of bar apps. Records: `{application, appName, icon, desc, changeLog, fileUrl, md5, sha256, versionCode, versionName}`. `md5` sometimes holds the SHA-256. Some `fileUrl`s are plain `http://`. On 2026-11-12 there were 15 apps: vendor apps (Whitenoise, Home Assistant, Sonos, Notes, Radio, Files, Calculator, Alarmclock, UltraAgent) and third-party ones.
+- **One app:** `POST apps/100/<package>/fetchLastVerV2`, empty body, returns one record. The bar uses this.
+- **Plugins:** `GET plugin/page?pi=1&ps=50`. Records: `{id, identifier, name, desc, author, icon, file, sha256, pluginType, official, preview, versionCode, versionName}`. All 9 are `pluginType: 0` (shortcut packs), and their zips match `sha256`.
+
+## Installing apps (`30600` / `30601`)
+`data` is `{"type": 0|1|2, "packageName", "appType"}`:
+- `type 0` (status): `{"status": "NOT_INSTALLED"|"DOWNLOADING"|"INSTALLING"|"INSTALLED", "versionCode", "versionName"}`. It reports `INSTALLING` for the whole download and install.
+- `type 1` (install, `appType: 100`): the bar looks the package up with `fetchLastVerV2`, downloads `fileUrl` and installs it silently with no prompt on the bar. **It doesn't check the hash [code].** It replies `"success"` right away, then sends `30601` events **under the request's id**, to every connected computer. The first event arrives *before* the reply, so match replies on `id` and `act`. Events: `{packageName, type: "STATUS", result: "DOWNLOADING"|"INSTALLING"|"INSTALLED"|"FAIL"}` and `{packageName, type: "DOWNLOAD"|"INSTALL", result: 1–100}`. Installing Whitenoise (about 10 MB) took about 20 s. After `INSTALL 100` there are about 10 more quiet seconds before `INSTALLED`. Only one install runs at a time; a second one fails with `FAIL`. Installing over an installed app updates it.
+- `type 2` (uninstall): replies `"success"` when done, in under a second. Built-in apps (`systemApp: true` in `1000`) can't be uninstalled.
+- `1000` items carry `versionCode`, so comparing them with the catalog shows available updates.
+
+## Shortcut packs (plugins) and `HOT_KEY_GROUP`
+A pack zip has `config.json` `{name, identifier, icon, versionCode, button: [...]}` plus images. Each button is `{id, name, icon, type: "PC_CONTROL", spanSize: 1|2, param}`. `param` is the usual `{output: 5, keys}` (hotkey typed by the bar) or `{output: 10, payload: {action, params}}` (sent to the PC). Icons are `file://<path in zip>` or `http(s)` URLs. The packs use hotkeys, `openBrowser` and `inputText`.
+
+The official app deploys a pack as one `HOT_KEY_GROUP` widget with `param: {button: [...]}`. On the bar it's an icon card with the name at the bottom, drawn like `PC_CONTROL` (`getScaledBitmap(265, 245, …)`). Tapping it opens a page with the buttons in two rows, scrolling sideways; `spanSize: 2` buttons take both rows. Button icons load like card icons and are drawn at `iconScale` (40 if missing). Taps and long presses run `output 5`/`10` like `PC_CONTROL` cards. Buttons whose `type` isn't `PC_CONTROL` do nothing **[code]**. Everything has to fit in the single `1108` line (8 KB), so large packs (Emoji has 64 buttons) need trimming.
+

@@ -16,6 +16,7 @@ export const GLYPHS: Record<string, L.LucideIcon> = {
   "wand-2": L.Wand2, sparkles: L.Sparkles, "pen-tool": L.PenTool, "file-text": L.FileText, image: L.Image,
   "shopping-cart": L.ShoppingCart, wifi: L.Wifi, "skip-forward": L.SkipForward, "skip-back": L.SkipBack,
   "screen-share": L.ScreenShare, "eye-off": L.EyeOff, target: L.Target, flame: L.Flame, "book-open": L.BookOpen,
+  "layout-grid": L.LayoutGrid,
 };
 
 export const GLYPH_COLORS = ["#ffffff", "#c7cbff", "#7c86ff", "#5ad1a0", "#ffcc66", "#ff8a7a", "#f5a3d8", "#8fd3ff"];
@@ -59,6 +60,20 @@ export async function imageFilePng(file: File): Promise<string> {
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/** Any image URL (e.g. a data URL from a shortcut pack) as a PNG that fits
+ * in `max` px; the bar's icon server only takes PNGs. */
+export async function imageUrlPng(src: string, max = 160): Promise<string> {
+  const img = await loadImage(src);
+  const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+  c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const ctx = c.getContext("2d")!;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL("image/png");
 }
 
 /** Full card face for computer-action and multi-action cards (520×480, the

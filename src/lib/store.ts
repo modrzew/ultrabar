@@ -1,5 +1,8 @@
 import { create } from "zustand";
-import { ACT, api, errorMessage, firmwareBefore, on, type AppInfo, type BarStatus, type PcActionEvent, type PushEnvelope } from "./api";
+import {
+  ACT, APP_TYPE, api, errorMessage, firmwareBefore, on,
+  type AppInfo, type BarStatus, type PcActionEvent, type PushEnvelope, type StoreApp, type StorePlugin,
+} from "./api";
 import type { Automation, Doc, Profile, Widget } from "./model";
 import { uid } from "./model";
 import { PC_ACTIONS, newWidget } from "./widgets";
@@ -19,7 +22,9 @@ export interface BarApp {
   appName: string;
   icon?: string;
   versionName?: string;
+  versionCode?: number;
   systemApp?: boolean;
+  screensaver?: boolean;
   allowProfile?: boolean;
   config?: boolean;
   port?: number;
@@ -80,6 +85,24 @@ export type DeployState =
   | { phase: "done"; at: number; warnings: string[] }
   | { phase: "error"; message: string; step: string };
 
+/** The vendor's store, loaded when the Apps page or the pack browser opens. */
+export interface Market {
+  apps: StoreApp[];
+  plugins: StorePlugin[];
+  state: "idle" | "loading" | "ready" | "error";
+  error?: string;
+}
+
+/** An app the bar is installing or removing. The bar does one at a time. */
+export interface AppJob {
+  name: string;
+  phase: "starting" | "downloading" | "installing" | "uninstalling";
+  /** 0–100 within the phase, when the bar reports it. */
+  progress?: number;
+  /** Last word from the bar, to notice a lost install. */
+  at: number;
+}
+
 interface Catalog {
   apps: BarApp[];
   devices: { id: string; name: string; deviceType: string }[];
@@ -99,6 +122,8 @@ interface State {
   toasts: Toast[];
   pcLog: PcActionEvent[];
   connectOpen: boolean;
+  market: Market;
+  appJobs: Record<string, AppJob>;
   past: Doc[];
   future: Doc[];
 
@@ -112,6 +137,9 @@ interface State {
   toast(t: Omit<Toast, "id">): void;
   dismissToast(id: string): void;
   loadCatalog(): Promise<void>;
+  loadMarket(force?: boolean): Promise<void>;
+  installApp(pkg: string, name: string): Promise<void>;
+  uninstallApp(pkg: string, name: string): Promise<void>;
   runDeploy(): Promise<void>;
   showProfileOnBar(id: string): Promise<void>;
 
@@ -181,6 +209,8 @@ export const useApp = create<State>((set, get) => ({
   toasts: [],
   pcLog: [],
   connectOpen: false,
+  market: { apps: [], plugins: [], state: "idle" },
+  appJobs: {},
   past: [],
   future: [],
 
@@ -204,13 +234,19 @@ export const useApp = create<State>((set, get) => ({
     await on<BarStatus>("bar-status", (s) => {
       const prev = get().status.state;
       set({ status: s });
-      if (s.state === "online" && prev !== "online") void get().loadCatalog();
+      if (s.state === "online" && prev !== "online") {
+        void get().loadCatalog();
+        void checkAppJobs(0);
+      }
     });
     await on<PcActionEvent>("pc-action", (e) => {
       set({ pcLog: [e, ...get().pcLog].slice(0, 50) });
       if (!e.ok) get().toast({ kind: "error", title: "Blocked a request from the bar", body: e.error ?? undefined });
     });
-    await on<PushEnvelope>("bar-push", () => {});
+    await on<PushEnvelope>("bar-push", (e) => {
+      if (e.act === ACT.appManagerEvent) onAppEvent(e.data);
+    });
+    setInterval(() => void checkAppJobs(60_000), 20_000);
     if (status?.state === "online") void get().loadCatalog();
   },
 
@@ -291,6 +327,44 @@ export const useApp = create<State>((set, get) => ({
     });
   },
 
+  async loadMarket(force) {
+    const m = get().market;
+    if (m.state === "loading" || (m.state === "ready" && !force)) return;
+    set({ market: { ...m, state: "loading", error: undefined } });
+    try {
+      const [apps, plugins] = await Promise.all([api.storeApps(), api.storePlugins()]);
+      set({ market: { apps, plugins, state: "ready" } });
+    } catch (e) {
+      set({ market: { ...get().market, state: "error", error: errorMessage(e) } });
+    }
+  },
+
+  async installApp(pkg, name) {
+    if (Object.keys(get().appJobs).length) return;
+    setJob(pkg, { name, phase: "starting" });
+    try {
+      // The bar answers right away, then reports progress (act 30601).
+      await api.request(ACT.appManager, { type: 1, appType: APP_TYPE, packageName: pkg }, 15000);
+    } catch (e) {
+      setJob(pkg, null);
+      get().toast({ kind: "error", title: `Couldn't install ${name}`, body: errorMessage(e) });
+    }
+  },
+
+  async uninstallApp(pkg, name) {
+    if (Object.keys(get().appJobs).length) return;
+    setJob(pkg, { name, phase: "uninstalling" });
+    try {
+      await api.request(ACT.appManager, { type: 2, packageName: pkg }, 30000);
+      get().toast({ kind: "success", title: `Removed ${name} from the bar` });
+    } catch (e) {
+      get().toast({ kind: "error", title: `Couldn't remove ${name}`, body: errorMessage(e) });
+    } finally {
+      setJob(pkg, null);
+      void get().loadCatalog();
+    }
+  },
+
   async runDeploy() {
     if (get().deploy.phase === "running") return;
     const doc = get().doc;
@@ -314,10 +388,11 @@ export const useApp = create<State>((set, get) => ({
           return w.icon.kind === "url" ? w.icon.url : publish(w.icon.png);
         },
         async (w) => {
-          const fallback = w.type === "PC_CONTROL" && w.pc ? PC_ACTIONS[w.pc.action].glyph : "layers";
+          const fallback = w.type === "PC_CONTROL" && w.pc ? PC_ACTIONS[w.pc.action].glyph : w.type === "HOT_KEY_GROUP" ? "layout-grid" : "layers";
           const icon = w.icon?.kind === "url" ? w.icon.url : w.icon?.png ?? (await glyphPng(fallback, "#ffffff"));
           return publish(await cardArtPng(w.bgColor ?? "#24252b", icon, w.iconScale));
         },
+        publish,
       );
 
       // Firmware 1.0.9 moved the batch scene save to 30500 and accepts an
@@ -331,7 +406,7 @@ export const useApp = create<State>((set, get) => ({
         throw new Error(`Your multi-actions and automations are too large to send in one go (${kb(lineSize(scenesAct, plan.scenes))} of 8 KB). Remove a few actions and try again.`);
       }
       if (!fitsOneLine(ACT.saveProfiles, plan.profiles)) {
-        throw new Error(`Your profiles are too large to send in one go (${kb(lineSize(ACT.saveProfiles, plan.profiles))} of 8 KB). Remove a few cards or actions, or shorten long names, commands and text.`);
+        throw new Error(`Your profiles are too large to send in one go (${kb(lineSize(ACT.saveProfiles, plan.profiles))} of 8 KB). Remove a few cards, actions or shortcut-group buttons, or shorten long names, commands and text.`);
       }
 
       if (plan.modules) {
@@ -468,6 +543,62 @@ export const useApp = create<State>((set, get) => ({
     return a.id;
   },
 }));
+
+function setJob(pkg: string, job: Omit<AppJob, "at"> | null) {
+  const jobs = { ...useApp.getState().appJobs };
+  if (job) jobs[pkg] = { ...job, at: Date.now() };
+  else delete jobs[pkg];
+  useApp.setState({ appJobs: jobs });
+}
+
+function appName(pkg: string): string {
+  const s = useApp.getState();
+  return s.appJobs[pkg]?.name
+    ?? s.catalog.apps.find((a) => a.application === pkg)?.appName
+    ?? s.market.apps.find((a) => a.application === pkg)?.appName
+    ?? pkg;
+}
+
+/** Install progress (act 30601): `{packageName, type: DOWNLOAD|INSTALL, result: 1–100}`
+ * or `{packageName, type: STATUS, result: DOWNLOADING|INSTALLING|INSTALLED|FAIL}`.
+ * The bar sends these to every connected computer, so installs started
+ * elsewhere show up too. */
+function onAppEvent(data: unknown) {
+  const d = (data ?? {}) as { packageName?: string; type?: string; result?: unknown };
+  const pkg = d.packageName;
+  if (!pkg) return;
+  const s = useApp.getState();
+  const name = appName(pkg);
+  const job = s.appJobs[pkg];
+  if (d.type === "DOWNLOAD" || d.type === "INSTALL") {
+    const progress = typeof d.result === "number" ? Math.max(0, Math.min(100, d.result)) : undefined;
+    setJob(pkg, { name, phase: d.type === "DOWNLOAD" ? "downloading" : "installing", progress });
+  } else if (d.type === "STATUS") {
+    if (d.result === "DOWNLOADING") setJob(pkg, { name, phase: "downloading", progress: job?.phase === "downloading" ? job.progress : undefined });
+    else if (d.result === "INSTALLING") setJob(pkg, { name, phase: "installing" });
+    else if (d.result === "INSTALLED" || d.result === "FAIL") {
+      setJob(pkg, null);
+      void s.loadCatalog();
+      if (d.result === "INSTALLED") s.toast({ kind: "success", title: `${name} is installed on the bar` });
+      else s.toast({ kind: "error", title: `The bar couldn't install ${name}`, body: "It may have lost its internet connection, or another app was installing. Try again." });
+    }
+  }
+}
+
+/** Clears installs the bar stopped reporting on (e.g. the connection dropped
+ * before the last event) once it says it's no longer busy with them. */
+async function checkAppJobs(quietFor: number) {
+  const s = useApp.getState();
+  if (s.status.state !== "online") return;
+  for (const [pkg, job] of Object.entries(s.appJobs)) {
+    if (job.phase === "uninstalling" || Date.now() - job.at < quietFor) continue;
+    const r = await api.request<{ status?: string }>(ACT.appManager, { type: 0, packageName: pkg }).catch(() => null);
+    if (r && r.status !== "INSTALLING" && r.status !== "DOWNLOADING" && useApp.getState().appJobs[pkg]?.at === job.at) {
+      setJob(pkg, null);
+      void useApp.getState().loadCatalog();
+    }
+  }
+}
 
 function fixSelection() {
   const { selected, doc, view } = useApp.getState();

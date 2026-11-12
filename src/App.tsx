@@ -91,7 +91,7 @@ function TitleBar() {
     : view.kind === "automations" ? "Automations"
     : view.kind === "modules" ? "Modules"
     : view.kind === "integrations" ? "Integrations"
-    : view.kind === "apps" ? "Apps on the bar"
+    : view.kind === "apps" ? "Apps"
     : "Settings";
   return (
     <header className={`titlebar${isMac ? " mac" : ""}`} data-tauri-drag-region>
@@ -230,7 +230,7 @@ function Sidebar() {
         {nav("automations", "Automations", Workflow, doc.automations.length || undefined)}
         {nav("modules", "Modules", Boxes, doc.modules.length || undefined)}
         {nav("integrations", "Integrations", Plug)}
-        {nav("apps", "Apps on the bar", Blocks)}
+        {nav("apps", "Apps", Blocks)}
         {nav("settings", "Settings", Settings)}
       </div>
       <UpdateNotice />

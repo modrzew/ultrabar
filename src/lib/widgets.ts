@@ -8,6 +8,7 @@ import {
   Globe2,
   Keyboard,
   Layers,
+  LayoutGrid,
   Lightbulb,
   Settings2,
   TerminalSquare,
@@ -62,6 +63,7 @@ export const WIDGETS: Record<WidgetType, WidgetDef> = {
   /** Removed in bar firmware 1.0.9; kept so older layouts still load. */
   SET: { label: "Bar settings", description: "No longer available on the bar", icon: Settings2, units: 1 },
   DEVICE: { label: "Device", description: "Smart home device", icon: Lightbulb, units: 1 },
+  HOT_KEY_GROUP: { label: "Shortcut group", description: "Opens a page of shortcut buttons", icon: LayoutGrid, units: 1, iconCard: true },
 };
 
 export function widgetUnits(w: Widget) {
@@ -89,6 +91,8 @@ export function newWidget(type: WidgetType, init: Partial<Widget> = {}): Widget 
       const pc: PcControl = init.pc ?? { action: "hotkey", keys: [] };
       return { ...base, name: init.name ?? PC_ACTIONS[pc.action].label, pc, bgColor: init.bgColor ?? "#24252b" };
     }
+    case "HOT_KEY_GROUP":
+      return { ...base, bgColor: init.bgColor ?? "#24252b", group: init.group ?? { buttons: [] } };
     default:
       return base;
   }

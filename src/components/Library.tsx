@@ -1,11 +1,12 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useDraggable } from "@dnd-kit/core";
-import { Plus, Search } from "lucide-react";
+import { LayoutGrid, Plus, Search } from "lucide-react";
 import { useApp } from "../lib/store";
 import type { PcAction, Widget, WidgetType } from "../lib/model";
 import { PC_ACTIONS, WIDGETS, newWidget } from "../lib/widgets";
 import { glyphPng } from "../lib/icons";
 import { barAppIconUrl } from "../lib/deploy";
+import { PackBrowser } from "./PackBrowser";
 
 export interface LibItem {
   key: string;
@@ -49,6 +50,7 @@ export function Library({ profileId }: { profileId: string }) {
   const catalog = useApp((s) => s.catalog);
   const online = useApp((s) => s.status.state === "online");
   const barIp = useApp((s) => s.status.bar?.ip);
+  const [packs, setPacks] = useState<{ index?: number } | null>(null);
 
   const groups = useMemo(() => {
     const g: { title: string; items: LibItem[]; note?: string }[] = [
@@ -65,6 +67,13 @@ export function Library({ profileId }: { profileId: string }) {
         ],
       },
       { title: "Automation", items: [basic("SCENE", "Run several actions with one tap")] },
+      {
+        title: "Shortcut packs",
+        items: [{
+          key: "packs", label: "Browse shortcut packs", sub: "Zoom, OBS, Photoshop and more from the store",
+          icon: <LayoutGrid size={16} />, add: (_pid, index) => setPacks({ index }),
+        }],
+      },
     ];
     const apps = catalog.apps.filter((a) => a.allowProfile !== false);
     g.push({
@@ -111,6 +120,7 @@ export function Library({ profileId }: { profileId: string }) {
         ))}
         {!filtered.length && <div className="faint" style={{ padding: "8px 2px" }}>Nothing matches “{q}”.</div>}
       </div>
+      {packs && <PackBrowser profileId={profileId} index={packs.index} onClose={() => setPacks(null)} />}
     </>
   );
 }

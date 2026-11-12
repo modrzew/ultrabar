@@ -395,6 +395,7 @@ input[type="range"].slider::-webkit-slider-thumb { -webkit-appearance: none; wid
 .action-row .txt span { font-size: 11.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .action-row .btn { opacity: 0.0; }
 .action-row:hover .btn { opacity: 1; }
+.action-row .ico.btn-ico img { width: 18px; height: 18px; object-fit: contain; }
 .action-row.warn { border-color: rgba(242, 184, 75, 0.35); }
 .add-row { display: flex; align-items: center; justify-content: center; gap: 6px; height: 34px; border-radius: var(--r); border: 1px dashed var(--border-strong); background: none; color: var(--text-2); width: 100%; transition: border-color 0.12s, color 0.12s, background 0.12s; }
 .add-row:hover { border-color: var(--accent); color: var(--accent-text); background: var(--accent-soft); }
@@ -486,6 +487,7 @@ button.problem:hover { background: rgba(242, 184, 75, 0.13); }
 .release-log ul { margin: 0; padding-left: 18px; color: var(--text-2); font-size: 12.5px; }
 .release-log li + li { margin-top: 2px; }
 .release-log p { margin: 0; font-size: 12.5px; }
+.job { display: flex; flex-direction: column; gap: 5px; width: 150px; font-size: 11.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .progress { height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
 .progress > div { height: 100%; background: var(--accent); transition: width 0.2s var(--ease); }
 .progress > .indeterminate { width: 30%; animation: progress-slide 1.1s ease-in-out infinite; }

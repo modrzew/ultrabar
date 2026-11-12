@@ -3,7 +3,7 @@
 //! Lifecycle: connect → authenticate with the stored token (act 100) → online.
 //! Without a valid token we wait for the UI to ask for pairing (act 101), since
 //! the user has ~10 s to tap Approve on the bar. While online we send a
-//! heartbeat, match replies to requests by `id`, forward unsolicited messages
+//! heartbeat, match replies to requests by `id` and `act`, forward other messages
 //! to the UI, and answer bar → PC pushes. Any failure drops back to a
 //! reconnect loop that also re-discovers the bar if its IP changed.
 
@@ -445,6 +445,7 @@ async fn run(
                     }
 
                     if let Some(id) = &env.id
+                        && pending.get(id).is_some_and(|p| env.answers(p.act))
                         && let Some(p) = pending.remove(id)
                     {
                         let result = if env.is_ok() {

@@ -66,6 +66,13 @@ impl Envelope {
         s
     }
 
+    /// Whether this message is the reply to a request sent with `act` and the
+    /// same id. Progress events reuse the request's id: installing an app
+    /// (30600) streams 30601 events under its id, the first one before the reply.
+    pub fn answers(&self, act: i64) -> bool {
+        self.act == act || self.act == 0
+    }
+
     /// Firmware 1.0.9 answers an opcode it doesn't know with
     /// `{"act":10,"code":200,"id":"<request id> act error"}`. Returns that request id.
     pub fn unknown_act_for(&self) -> Option<&str> {
@@ -148,6 +155,18 @@ mod tests {
         assert_eq!(e.unknown_act_for(), Some("17"));
         let e = parse_line(r#"{"act":1103,"code":-1,"id":"19","msg":"profile id error"}"#).unwrap();
         assert_eq!(e.unknown_act_for(), None);
+    }
+
+    #[test]
+    fn progress_events_are_not_replies() {
+        // Captured from launcher 1.0.9 while installing an app (request id "am3").
+        let event = parse_line(r#"{"act":30601,"code":200,"data":{"packageName":"com.ultrabar.whitenoise","result":"DOWNLOADING","type":"STATUS"},"id":"am3","timestamp":1794478530413}"#).unwrap();
+        let reply = parse_line(
+            r#"{"act":30600,"code":200,"data":"success","id":"am3","timestamp":1794478530418}"#,
+        )
+        .unwrap();
+        assert!(!event.answers(30600));
+        assert!(reply.answers(30600));
     }
 
     #[test]

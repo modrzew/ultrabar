@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { CloudSun, Layers, Lightbulb, Settings2 } from "lucide-react";
+import { CloudSun, Layers, LayoutGrid, Lightbulb, Settings2 } from "lucide-react";
 import type { Widget } from "../lib/model";
 import { PC_ACTIONS, SOUNDSCAPES, WIDGETS, formatDuration, pcIsComplete } from "../lib/widgets";
 import { timeIn, zoneCity } from "../lib/timezones";
@@ -19,6 +19,7 @@ export function cardIssue(w: Widget): string | null {
   if (w.type === "SET") return "No longer available on the bar";
   if (w.type === "PC_CONTROL" && !pcIsComplete(w.pc)) return "Action isn't set up yet";
   if (w.type === "SCENE" && !w.actions?.length) return "Add at least one action";
+  if (w.type === "HOT_KEY_GROUP" && !w.group?.buttons.length) return "Has no buttons";
   if (w.type === "WEATHER" && (!w.weather?.lat || !w.weather?.lon)) return "Choose a location";
   return null;
 }
@@ -33,7 +34,8 @@ export function CardFace({ w }: { w: Widget }) {
     case "SOUNDSCAPE": return <SoundFace w={w} />;
     case "APPS": return <AppFace w={w} />;
     case "PC_CONTROL":
-    case "SCENE": return <IconFace w={w} />;
+    case "SCENE":
+    case "HOT_KEY_GROUP": return <IconFace w={w} />;
     case "SET":
       return (
         <div className="card-center c-set" style={{ background: "#1d1d20" }}>
@@ -150,7 +152,7 @@ function AppFace({ w }: { w: Widget }) {
 }
 
 function IconFace({ w }: { w: Widget }) {
-  const Fallback = w.type === "SCENE" ? Layers : PC_ACTIONS[w.pc?.action ?? "hotkey"].icon;
+  const Fallback = w.type === "SCENE" ? Layers : w.type === "HOT_KEY_GROUP" ? LayoutGrid : PC_ACTIONS[w.pc?.action ?? "hotkey"].icon;
   const src = w.icon ? (w.icon.kind === "url" ? w.icon.url : w.icon.png) : null;
   const size = `${Math.max(10, Math.min(100, w.iconScale))}%`;
   return (

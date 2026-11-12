@@ -35,6 +35,10 @@ sha2 = "0.10"
 base64 = "0.22"
 gethostname = "1"
 thiserror = "2"
+# Store catalog and shortcut-pack downloads. Same reqwest the updater uses,
+# with the ring provider this app already installs.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

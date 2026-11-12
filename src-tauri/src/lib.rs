@@ -1,6 +1,7 @@
 mod connection;
 mod discovery;
 mod icons;
+mod market;
 mod pc_agent;
 mod protocol;
 mod screen;
@@ -160,6 +161,28 @@ async fn refresh_bar_screen(state: State<'_, AppState>) -> Result<(), String> {
     screen::reload_home_screen(&ip).await
 }
 
+/// Apps in the vendor's store (the bar downloads and installs them itself).
+#[tauri::command]
+async fn store_apps() -> Result<Vec<market::StoreApp>, String> {
+    market::apps().await
+}
+
+/// Shortcut packs ("plugins") in the vendor's store.
+#[tauri::command]
+async fn store_plugins() -> Result<Vec<market::StorePlugin>, String> {
+    market::plugins().await
+}
+
+/// Downloads a shortcut pack, checks it against the catalog's hash and unpacks it.
+#[tauri::command]
+async fn store_plugin_pack(
+    file: String,
+    sha256: String,
+    icon: Option<String>,
+) -> Result<market::Pack, String> {
+    market::pack(&file, &sha256, icon.as_deref()).await
+}
+
 #[tauri::command]
 fn load_doc(state: State<'_, AppState>) -> Option<Value> {
     state.store.load_doc()
@@ -287,6 +310,9 @@ pub fn run() {
             forget_bar,
             bar_request,
             refresh_bar_screen,
+            store_apps,
+            store_plugins,
+            store_plugin_pack,
             load_doc,
             save_doc,
             set_allowed_actions,

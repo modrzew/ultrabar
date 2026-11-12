@@ -28,7 +28,7 @@ export function barAppIconUrl(pkg: string, host = "127.0.0.1") {
 
 /** Cards whose whole face is an image this app draws (color + symbol). */
 export function hasCardArt(w: Widget) {
-  return w.type === "PC_CONTROL" || w.type === "SCENE";
+  return w.type === "PC_CONTROL" || w.type === "SCENE" || w.type === "HOT_KEY_GROUP";
 }
 
 /** Card types the bar no longer has (firmware 1.0.9 shows them as "Not available"). */
@@ -36,7 +36,8 @@ export function isRetired(w: Widget) {
   return w.type === "SET";
 }
 
-export function widgetPayload(w: Widget, iconUrl?: string): Record<string, unknown> {
+/** `buttonIcons[i]` is the icon URL of shortcut-group button `i`. */
+export function widgetPayload(w: Widget, iconUrl?: string, buttonIcons: (string | undefined)[] = []): Record<string, unknown> {
   const p: Record<string, unknown> = { id: deployId(w), type: w.type, name: w.name, iconScale: w.iconScale };
   if (iconUrl) p.icon = iconUrl;
   // Card art already contains the symbol at the chosen size; let it fill the card.
@@ -72,6 +73,19 @@ export function widgetPayload(w: Widget, iconUrl?: string): Record<string, unkno
     case "DEVICE":
       if (w.device) p.type = w.device.deviceType;
       break;
+    case "HOT_KEY_GROUP":
+      // Tapping the card opens a page with these buttons in two rows. Kept
+      // short: every profile has to fit in one 8 KB message. Without an
+      // iconScale the bar draws button icons at 40%, as the official app does.
+      p.param = {
+        button: (w.group?.buttons ?? []).map((b, i) => {
+          const btn: Record<string, unknown> = { id: `b${i + 1}`, type: "PC_CONTROL", name: b.name, spanSize: b.span };
+          if (buttonIcons[i]) btn.icon = buttonIcons[i];
+          btn.param = pcParam(b.pc);
+          return btn;
+        }),
+      };
+      break;
   }
   return p;
 }
@@ -104,6 +118,7 @@ export function findProblems(doc: Doc, triggerTypes?: string[]): Problem[] {
       if (isRetired(w)) out.push({ where, message: "The bar no longer has this card, so it's left out. Remove it", ...at });
       if (w.type === "PC_CONTROL" && !pcIsComplete(w.pc)) out.push({ where, message: "Action isn't set up yet", ...at });
       if (w.type === "SCENE" && !w.actions?.length) out.push({ where, message: "Has no actions", ...at });
+      if (w.type === "HOT_KEY_GROUP" && !w.group?.buttons.length) out.push({ where, message: "Has no buttons", ...at });
       if (w.type === "WEATHER" && (!w.weather?.lat || !w.weather?.lon)) out.push({ where, message: "Needs a location", ...at });
       if (w.type === "SCENE") {
         for (const a of w.actions ?? []) {
@@ -134,11 +149,13 @@ export interface Plan {
 }
 
 /** `iconUrl` serves a card's icon; `cardArtUrl` the full card face of
- * computer-action and multi-action cards (see `hasCardArt`). */
+ * computer-action, multi-action and shortcut-group cards (see `hasCardArt`);
+ * `pngUrl` any other image (shortcut-group buttons). */
 export async function buildPlan(
   doc: Doc,
   iconUrl: (w: Widget) => Promise<string | undefined>,
   cardArtUrl: (w: Widget) => Promise<string | undefined>,
+  pngUrl: (png: string) => Promise<string>,
 ): Promise<Plan> {
   const allowed: unknown[] = [];
   const allowPc = (pc: Widget["pc"]) => {
@@ -152,8 +169,11 @@ export async function buildPlan(
     for (const w of p.widgets) {
       if (isRetired(w)) continue;
       const url = hasCardArt(w) ? await cardArtUrl(w) : await iconUrl(w);
-      widgets.push(widgetPayload(w, url));
+      const buttons = w.type === "HOT_KEY_GROUP" ? w.group?.buttons ?? [] : [];
+      const buttonIcons = await Promise.all(buttons.map((b) => (b.icon ? pngUrl(b.icon) : undefined)));
+      widgets.push(widgetPayload(w, url, buttonIcons));
       if (w.type === "PC_CONTROL") allowPc(w.pc);
+      buttons.forEach((b) => allowPc(b.pc));
       if (w.type === "SCENE") {
         (w.actions ?? []).forEach((a) => allowPc(a.pc));
         // Firmware before 1.0.9 runs this stored scene when the card is

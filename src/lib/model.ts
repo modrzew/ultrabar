@@ -11,7 +11,8 @@ export type WidgetType =
   | "PC_CONTROL"
   | "SCENE"
   | "SET"
-  | "DEVICE";
+  | "DEVICE"
+  | "HOT_KEY_GROUP";
 
 export type IconSpec =
   | { kind: "glyph"; glyph: string; color: string; png: string }
@@ -46,6 +47,17 @@ export interface Action {
   pc?: PcControl;
 }
 
+/** One button on a shortcut group's page. */
+export interface GroupButton {
+  uid: string;
+  name: string;
+  /** 1 = one cell, 2 = a full column (the page has two rows). */
+  span: 1 | 2;
+  /** PNG data URL. */
+  icon?: string;
+  pc: PcControl;
+}
+
 export interface Widget {
   uid: string;
   type: WidgetType;
@@ -62,6 +74,12 @@ export interface Widget {
   pc?: PcControl;
   actions?: Action[];
   device?: { id: string; deviceType: string };
+  /** Shortcut group: tapping the card opens a page of these buttons. */
+  group?: {
+    buttons: GroupButton[];
+    /** The store pack it came from. */
+    pack?: { id: number; name: string; versionCode?: number };
+  };
 }
 
 export interface Profile {

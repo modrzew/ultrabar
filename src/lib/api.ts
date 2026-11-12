@@ -50,6 +50,39 @@ export interface PushEnvelope {
   data?: unknown;
 }
 
+/** An app in the vendor's store. The bar downloads and installs it itself. */
+export interface StoreApp {
+  application: string;
+  appName: string;
+  icon?: string | null;
+  desc?: string | null;
+  versionName?: string | null;
+  versionCode?: number | null;
+}
+
+/** A shortcut pack ("plugin") in the vendor's store. */
+export interface StorePlugin {
+  id: number;
+  identifier: string;
+  name: string;
+  desc?: string | null;
+  author?: string | null;
+  icon?: string | null;
+  file: string;
+  sha256: string;
+  versionName?: string | null;
+  versionCode?: number | null;
+}
+
+/** A downloaded shortcut pack. Images are data URLs. */
+export interface Pack {
+  name: string;
+  identifier: string;
+  versionCode?: number | null;
+  icon?: string | null;
+  buttons: { name: string; spanSize: number; icon?: string | null; param: unknown }[];
+}
+
 type Mock = typeof import("./mock");
 let mockMod: Promise<Mock> | null = null;
 const mock = () => (mockMod ??= import("./mock"));
@@ -83,6 +116,9 @@ export const api = {
   setPcAgentEnabled: (enabled: boolean) => call<void>("set_pc_agent_enabled", { enabled }),
   testPcAction: (payload: unknown) => call<void>("test_pc_action", { payload }),
   publishIcon: (data: string) => call<string>("publish_icon", { data }),
+  storeApps: () => call<StoreApp[]>("store_apps"),
+  storePlugins: () => call<StorePlugin[]>("store_plugins"),
+  storePluginPack: (p: StorePlugin) => call<Pack>("store_plugin_pack", { file: p.file, sha256: p.sha256, icon: p.icon ?? null }),
 };
 
 export async function on<T>(event: string, cb: (payload: T) => void): Promise<UnlistenFn> {
@@ -119,6 +155,13 @@ export const ACT = {
   saveScenes: 30500,
   /** The same before 1.0.9, where 30500 saved a single scene. */
   saveScenesLegacy: 30501,
+  /** Install (type 1), uninstall (2) or query (0) an app; see `APP_TYPE`. */
+  appManager: 30600,
+  /** Install progress, sent under the 30600 request's id. */
+  appManagerEvent: 30601,
   triggerCatalog: 30700,
   profileList: 30710,
 } as const;
+
+/** `appType` of bar apps in the store, sent with install requests. */
+export const APP_TYPE = 100;

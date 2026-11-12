@@ -8,6 +8,7 @@ import { Button, Field, Spinner } from "./ui";
 import { PcControlEditor } from "./editors/PcControlEditor";
 import { IconEditor } from "./editors/IconEditor";
 import { ActionList } from "./Actions";
+import { GroupButtons } from "./GroupButtons";
 import { glyphPng } from "../lib/icons";
 
 export function Inspector({ uid }: { uid: string }) {
@@ -151,6 +152,25 @@ function Body({ w, set }: { w: Widget; set: Setter }) {
           </div>
         </div>
       );
+    case "HOT_KEY_GROUP": {
+      const buttons = w.group?.buttons ?? [];
+      const pack = w.group?.pack;
+      return (
+        <div className="stack" style={{ gap: 0 }}>
+          <div className="panel-section">
+            <NameField w={w} set={set} hint="Shown on the card. Tapping the card opens its buttons." />
+            <Field label={`Buttons (${buttons.length})`} hint="Laid out in two rows on the bar, in this order. Shortcuts are typed by the bar itself; links and text go through this computer.">
+              <GroupButtons buttons={buttons} onChange={(b) => set((x) => { x.group = { ...x.group, buttons: b }; })} />
+            </Field>
+            {pack && <Note>From the “{pack.name}” shortcut pack in the UltraBar store.</Note>}
+          </div>
+          <div className="panel-section">
+            <h4>Appearance</h4>
+            <IconEditor w={w} set={set} />
+          </div>
+        </div>
+      );
+    }
     case "DEVICE":
       return (
         <div className="stack">
