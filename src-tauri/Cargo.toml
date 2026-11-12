@@ -1,6 +1,6 @@
 [package]
 name = "ultrabar"
-version = "0.0.1"
+version = "0.0.2"
 description = "Configure and control an UltraBar X display bar"
 authors = ["Tomek Modrzynski"]
 edition = "2024"
