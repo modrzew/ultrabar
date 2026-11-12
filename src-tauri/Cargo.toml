@@ -38,7 +38,9 @@ thiserror = "2"
 # Store catalog and shortcut-pack downloads. Same reqwest the updater uses,
 # with the ring provider this app already installs.
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
-zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+# deflate-flate2 alone leaves flate2 without a backend; macOS only built because
+# the updater pulls in flate2's default backend there, Windows doesn't.
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
