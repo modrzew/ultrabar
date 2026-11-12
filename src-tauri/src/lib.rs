@@ -232,6 +232,9 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // The app updates itself from the GitHub releases, then relaunches into the new version.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let dir = app.path().app_data_dir().expect("app data dir");
             let store = Store::new(dir.clone());

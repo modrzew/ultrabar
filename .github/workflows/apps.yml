@@ -1,0 +1,207 @@
+name: Apps
+
+on:
+  # Releases published by hand. The release workflow calls this directly instead.
+  release:
+    types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build, e.g. v1.2.3
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ inputs.tag || github.event.release.tag_name }}
+
+jobs:
+  # Apple Silicon only. Signed with a self-signed certificate, not notarized.
+  macos:
+    runs-on: macos-latest
+    env:
+      # Signs the update package; the matching public key is in src-tauri/tauri.conf.json.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+    outputs:
+      signature: ${{ steps.upload.outputs.signature }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Check the updater signing key
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is missing, so the app can't be signed for auto-update"
+            exit 1
+          fi
+
+      # macOS ties privacy grants (Accessibility, which "Type text" needs) to the app's signing
+      # identity. An ad-hoc signature is a hash of the build, so every update would lose them; a
+      # certificate stays the same from release to release. Never sign a release any other way,
+      # and keep the certificate: a new one resets the grants on every Mac once more.
+      - name: Import the code signing certificate
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_SIGNING_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$CERTIFICATE" ] || [ -z "$CERTIFICATE_PASSWORD" ]; then
+            echo "::error::The MACOS_SIGNING_CERTIFICATE or MACOS_SIGNING_CERTIFICATE_PASSWORD secret is missing, so the app can't be signed"
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(openssl rand -base64 24)
+          base64 --decode <<< "$CERTIFICATE" > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -f pkcs12 -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          # Lets codesign use the key without a prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          # Where codesign looks for the identity.
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          # Self-signed, so macOS doesn't call it valid, but codesign signs with it.
+          security find-identity -p codesigning "$keychain"
+
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: bun install --frozen-lockfile
+      # With bundle.createUpdaterArtifacts the build also packs the .app into a signed
+      # .app.tar.gz for the updater. It only does that when the app bundle is a target,
+      # and without it the build deletes the .app after making the .dmg.
+      - run: bun tauri build --target aarch64-apple-darwin --bundles app,dmg
+        env:
+          # The certificate's name. Overrides the ad-hoc signature that local builds get.
+          APPLE_SIGNING_IDENTITY: UltraBar Self-Signed
+
+      - name: Check the signature
+        run: |
+          app=src-tauri/target/aarch64-apple-darwin/release/bundle/macos/UltraBar.app
+          codesign --verify --strict "$app"
+          requirement=$(codesign --display --requirements - "$app" 2>&1)
+          echo "$requirement"
+          # An ad-hoc signature's requirement is the build's hash.
+          if ! grep -q 'designated =>' <<< "$requirement" || grep -q cdhash <<< "$requirement"; then
+            echo "::error::The app isn't signed with the certificate"
+            exit 1
+          fi
+
+      - name: Attach the .dmg and the updater artifacts to the release
+        id: upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bundle=src-tauri/target/aarch64-apple-darwin/release/bundle
+          archive="UltraBar_${TAG#v}_aarch64.app.tar.gz"
+          mv "$bundle/macos/UltraBar.app.tar.gz" "$bundle/macos/$archive"
+          mv "$bundle/macos/UltraBar.app.tar.gz.sig" "$bundle/macos/$archive.sig"
+          gh release upload "$TAG" "$bundle"/dmg/*.dmg "$bundle/macos/$archive" "$bundle/macos/$archive.sig" --clobber
+          echo "signature=$(cat "$bundle/macos/$archive.sig")" >> "$GITHUB_OUTPUT"
+
+  # 64-bit x86 only. Not code signed.
+  windows:
+    runs-on: windows-latest
+    env:
+      # Signs the update package; the matching public key is in src-tauri/tauri.conf.json.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      signature: ${{ steps.upload.outputs.signature }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Check the updater signing key
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is missing, so the app can't be signed for auto-update"
+            exit 1
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: bun install --frozen-lockfile
+      # The NSIS installer is both the download and, with its signature, the update package.
+      # It installs for the current user, and an update reinstalls over the same folder, so
+      # Windows Firewall's "allow" for UltraBar carries over.
+      - run: bun tauri build --target x86_64-pc-windows-msvc --bundles nsis
+
+      - name: Attach the installer and its signature to the release
+        id: upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          nsis=src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis
+          installer="UltraBar_${TAG#v}_x64-setup.exe"
+          gh release upload "$TAG" "$nsis/$installer" "$nsis/$installer.sig" --clobber
+          echo "signature=$(cat "$nsis/$installer.sig")" >> "$GITHUB_OUTPUT"
+
+  # The updater finds the packages and their signatures through the latest.json manifest. One
+  # manifest serves both platforms; a platform whose build failed is left out, so its installs
+  # simply see no update until a re-run adds it.
+  manifest:
+    needs: [macos, windows]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write the update manifest and attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MACOS_SIGNATURE: ${{ needs.macos.outputs.signature }}
+          WINDOWS_SIGNATURE: ${{ needs.windows.outputs.signature }}
+        run: |
+          version=${TAG#v}
+          download="https://github.com/$GH_REPO/releases/download/$TAG"
+          platforms='{}'
+          add() {
+            platforms=$(jq --arg key "$1" --arg url "$download/$2" --arg signature "$3" \
+              '.[$key] = {url: $url, signature: $signature}' <<< "$platforms")
+          }
+          if [ -n "$MACOS_SIGNATURE" ]; then
+            add darwin-aarch64 "UltraBar_${version}_aarch64.app.tar.gz" "$MACOS_SIGNATURE"
+          else
+            echo "::warning::No macOS build, so Macs won't be offered $TAG"
+          fi
+          if [ -n "$WINDOWS_SIGNATURE" ]; then
+            add windows-x86_64 "UltraBar_${version}_x64-setup.exe" "$WINDOWS_SIGNATURE"
+          else
+            echo "::warning::No Windows build, so Windows PCs won't be offered $TAG"
+          fi
+          if [ "$platforms" = '{}' ]; then
+            echo "::error::Neither build finished, so there's nothing to offer as an update"
+            exit 1
+          fi
+          notes=$(gh release view "$TAG" --json body -q .body)
+          published=$(gh release view "$TAG" --json publishedAt -q .publishedAt)
+          jq -n \
+            --arg version "$version" \
+            --arg notes "$notes" \
+            --arg pub_date "$published" \
+            --argjson platforms "$platforms" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' \
+            > latest.json
+          cat latest.json
+          # After both builds, so the app never finds a manifest pointing at a package that isn't there yet.
+          gh release upload "$TAG" latest.json --clobber

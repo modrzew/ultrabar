@@ -31,8 +31,18 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "requireSignedVersion": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZDMjM5NTYyOTc3MUEzMDgKUldRSW8zR1hZcFVqL0VGNm1xMzV1clE5UlRlRUZwY3dpS1RWRXRoZXRZQWxzR1ZxelRWdFRtTFoK",
+      "endpoints": [
+        "https://github.com/modrzew/ultrabar/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "category": "Utility",
     "shortDescription": "Configure your UltraBar X",
@@ -44,7 +54,14 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-",
+      "hardenedRuntime": false
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
     }
   }
 }

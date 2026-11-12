@@ -130,6 +130,17 @@ button { cursor: default; }
 .device-card .name { font-weight: 550; }
 .device-card .sub { font-size: 11.5px; color: var(--text-3); }
 
+.update-card {
+  margin: 8px 8px 0; padding: 8px 10px; border-radius: var(--r);
+  background: var(--accent-soft); border: 1px solid rgba(91, 103, 248, 0.28);
+  display: flex; align-items: center; gap: 10px; text-align: left; width: calc(100% - 16px);
+  transition: background 0.15s, border-color 0.15s;
+}
+.update-card:hover { background: rgba(91, 103, 248, 0.24); border-color: rgba(91, 103, 248, 0.45); }
+.update-card svg { flex: none; color: var(--accent-text); }
+.update-card .name { font-weight: 550; }
+.update-card .sub { font-size: 11.5px; color: var(--accent-text); }
+
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--text-3); }
 .dot.online { background: var(--success); box-shadow: 0 0 0 3px rgba(62, 207, 142, 0.16); }
 .dot.connecting { background: var(--warning); animation: pulse 1.2s ease-in-out infinite; }
@@ -466,3 +477,16 @@ button.problem:hover { background: rgba(242, 184, 75, 0.13); }
 .log-row { display: flex; gap: 10px; align-items: center; padding: 8px 14px; border-top: 1px solid var(--border); font-size: 12px; }
 .log-row:first-child { border-top: 0; }
 .log-row .when { color: var(--text-3); font-variant-numeric: tabular-nums; flex: none; white-space: nowrap; min-width: 64px; }
+
+/* ───────────────────────── Update dialog ───────────────────────── */
+.release-log { display: flex; flex-direction: column; gap: 14px; max-height: min(320px, 45vh); overflow-y: auto; padding: 12px 14px; border-radius: var(--r); background: var(--bg); border: 1px solid var(--border); }
+.release-log h4 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.release-log h4 .faint { font-size: 11.5px; font-weight: 400; }
+.release-log ul { margin: 0; padding-left: 18px; color: var(--text-2); font-size: 12.5px; }
+.release-log li + li { margin-top: 2px; }
+.release-log p { margin: 0; font-size: 12.5px; }
+.progress { height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.progress > div { height: 100%; background: var(--accent); transition: width 0.2s var(--ease); }
+.progress > .indeterminate { width: 30%; animation: progress-slide 1.1s ease-in-out infinite; }
+@keyframes progress-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+.update-error { margin: 0; padding: 8px 10px; border-radius: var(--r-sm); background: var(--danger-soft); color: var(--danger); font-size: 12px; }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  AlertTriangle, ArrowUpFromLine, Blocks, Boxes, Check, CheckCircle2, Copy, LayoutGrid, MoreHorizontal, Pencil,
+  AlertTriangle, ArrowUpFromLine, Blocks, Boxes, Check, CheckCircle2, CircleArrowDown, Copy, LayoutGrid, MoreHorizontal, Pencil,
   Plug, Plus, Settings, Star, Trash2, Workflow, XCircle,
 } from "lucide-react";
 import { isDirty, useApp } from "./lib/store";
@@ -14,6 +14,8 @@ import { IntegrationsView } from "./views/Integrations";
 import { AppsView } from "./views/Apps";
 import { SettingsView } from "./views/Settings";
 import { ConnectSheet, statusDot, statusText } from "./components/ConnectSheet";
+import { UpdateDialog } from "./components/UpdateDialog";
+import { useUpdateCheck } from "./lib/updates";
 
 export default function App() {
   const ready = useApp((s) => s.ready);
@@ -229,6 +231,7 @@ function Sidebar() {
         {nav("apps", "Apps on the bar", Blocks)}
         {nav("settings", "Settings", Settings)}
       </div>
+      <UpdateNotice />
       <button className="device-card" onClick={() => useApp.getState().setConnectOpen(true)}>
         <span className={`dot ${statusDot(status.state)}`} />
         <span className="grow">
@@ -237,6 +240,25 @@ function Sidebar() {
         </span>
       </button>
     </aside>
+  );
+}
+
+/** Shows up above the bar's card once a newer release is out. */
+function UpdateNotice() {
+  const version = useUpdateCheck();
+  const [open, setOpen] = useState(false);
+  if (!version) return null;
+  return (
+    <>
+      <button className="update-card" onClick={() => setOpen(true)}>
+        <CircleArrowDown size={16} />
+        <span className="grow">
+          <div className="name truncate">Update available</div>
+          <div className="sub truncate">Version {version}</div>
+        </span>
+      </button>
+      {open && <UpdateDialog version={version} onClose={() => setOpen(false)} />}
+    </>
   );
 }
 
