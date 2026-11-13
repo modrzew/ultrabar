@@ -32,7 +32,7 @@ jobs:
     outputs:
       signature: ${{ steps.upload.outputs.signature }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ env.TAG }}
 
@@ -71,11 +71,11 @@ jobs:
           # Self-signed, so macOS doesn't call it valid, but codesign signs with it.
           security find-identity -p codesigning "$keychain"
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2.2.0
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: src-tauri
       - run: bun install --frozen-lockfile
@@ -123,7 +123,7 @@ jobs:
     outputs:
       signature: ${{ steps.upload.outputs.signature }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ env.TAG }}
 
@@ -134,11 +134,11 @@ jobs:
             exit 1
           fi
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2.2.0
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: src-tauri
       - run: bun install --frozen-lockfile
