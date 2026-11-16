@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Copy, Info, MapPin, Search, Trash2 } from "lucide-react";
 import { findWidget, useApp } from "../lib/store";
 import type { Widget } from "../lib/model";
-import { PC_ACTIONS, SOUNDSCAPES, WIDGETS } from "../lib/widgets";
+import { SOUNDSCAPES, WIDGETS, pcMeta } from "../lib/widgets";
 import { allZones, timeIn, zoneCity, zoneOffset, zoneRegion } from "../lib/timezones";
 import { Button, Field, Spinner } from "./ui";
 import { PcControlEditor } from "./editors/PcControlEditor";
@@ -16,8 +16,8 @@ export function Inspector({ uid }: { uid: string }) {
   const s = useApp.getState();
   if (!w) return null;
   const def = WIDGETS[w.type];
-  const Icon = w.type === "PC_CONTROL" && w.pc ? PC_ACTIONS[w.pc.action].icon : def.icon;
-  const title = w.type === "PC_CONTROL" && w.pc ? PC_ACTIONS[w.pc.action].label : def.label;
+  const Icon = w.type === "PC_CONTROL" && w.pc ? pcMeta(w.pc).icon : def.icon;
+  const title = w.type === "PC_CONTROL" && w.pc ? pcMeta(w.pc).label : def.label;
   const set = (mut: (w: Widget) => void, key?: string) => s.updateWidget(uid, mut, key);
 
   return (
@@ -50,14 +50,15 @@ function NameField({ w, set, label = "Name", hint }: { w: Widget; set: Setter; l
 /** Switching the action type also updates the name and symbol, unless the
  * user has customised them. */
 function changePc(w: Widget, pc: NonNullable<Widget["pc"]>, set: Setter, key?: string) {
-  const old = w.pc?.action;
-  const switched = !!old && old !== pc.action;
+  const old = pcMeta(w.pc);
+  const next = pcMeta(pc);
+  const switched = !!w.pc && (old.label !== next.label || old.glyph !== next.glyph);
   set((x) => {
-    if (switched && x.name === PC_ACTIONS[old!].label) x.name = PC_ACTIONS[pc.action].label;
+    if (switched && x.name === old.label) x.name = next.label;
     x.pc = pc;
   }, switched ? undefined : key);
-  if (switched && w.icon?.kind === "glyph" && w.icon.glyph === PC_ACTIONS[old!].glyph) {
-    const glyph = PC_ACTIONS[pc.action].glyph;
+  if (switched && w.icon?.kind === "glyph" && w.icon.glyph === old.glyph && old.glyph !== next.glyph) {
+    const glyph = next.glyph;
     const color = w.icon.color;
     void glyphPng(glyph, color).then((png) =>
       useApp.getState().updateWidget(w.uid, (x) => { x.icon = { kind: "glyph", glyph, color, png }; }, undefined, true),

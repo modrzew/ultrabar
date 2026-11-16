@@ -4674,6 +4674,7 @@ dependencies = [
  "base64 0.22.1",
  "gethostname",
  "if-addrs",
+ "libc",
  "reqwest",
  "rustls",
  "serde",
@@ -4691,6 +4692,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "uuid",
+ "windows",
  "zip",
 ]
 

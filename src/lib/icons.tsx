@@ -16,7 +16,7 @@ export const GLYPHS: Record<string, L.LucideIcon> = {
   "wand-2": L.Wand2, sparkles: L.Sparkles, "pen-tool": L.PenTool, "file-text": L.FileText, image: L.Image,
   "shopping-cart": L.ShoppingCart, wifi: L.Wifi, "skip-forward": L.SkipForward, "skip-back": L.SkipBack,
   "screen-share": L.ScreenShare, "eye-off": L.EyeOff, target: L.Target, flame: L.Flame, "book-open": L.BookOpen,
-  "layout-grid": L.LayoutGrid,
+  "layout-grid": L.LayoutGrid, "headphone-off": L.HeadphoneOff, "phone-off": L.PhoneOff, "audio-lines": L.AudioLines,
 };
 
 export const GLYPH_COLORS = ["#ffffff", "#c7cbff", "#7c86ff", "#5ad1a0", "#ffcc66", "#ff8a7a", "#f5a3d8", "#8fd3ff"];

@@ -19,7 +19,19 @@ export type IconSpec =
   | { kind: "image"; png: string }
   | { kind: "url"; url: string };
 
-export type PcAction = "hotkey" | "openBrowser" | "startApp" | "openFile" | "execCmd" | "inputText";
+export type PcAction = "hotkey" | "openBrowser" | "startApp" | "openFile" | "execCmd" | "inputText" | "discord";
+
+export type DiscordOp = "joinVoice" | "leaveVoice" | "toggleMute" | "toggleDeafen" | "playSound" | "toggleCamera" | "toggleScreenShare";
+
+/** A Discord action this computer runs through the Discord app (see discord.rs). */
+export interface DiscordAction {
+  op: DiscordOp;
+  guildId?: string;
+  channelId?: string;
+  soundId?: string;
+  /** Channel or sound name, for display only (not sent to the bar). */
+  label?: string;
+}
 
 export interface PcControl {
   action: PcAction;
@@ -29,6 +41,7 @@ export interface PcControl {
   path?: string;
   cmd?: string;
   text?: string;
+  discord?: DiscordAction;
 }
 
 /** One step of a multi-action card or automation ("scene action" on the bar). */
@@ -82,12 +95,45 @@ export interface Widget {
   };
 }
 
+export type KeyEvent = "click" | "double" | "long";
+
+/** What one module key does in a profile: an action list per gesture. */
+export type KeyBinding = Partial<Record<KeyEvent, Action[]>>;
+
+/** What a Knob controls: a node from the bar's knob catalog (act 1617). */
+export interface KnobTarget {
+  /** e.g. "pc:volume", "local:bright", or a Home Assistant entity id. */
+  id: string;
+  /** The bar's ModalType, e.g. "PC_VOLUME", "LOCAL_BRIGHT", "LIGHT_HS". */
+  type: string;
+  name: string;
+}
+
+/** A module's buttons in one profile (deployed as the profile's `module` list). */
+export interface ModuleSetup {
+  serialNumber: string;
+  productId: string;
+  /** Key code (as a string) → gestures. Dot Key keys are 0–2; the Knob's button is 0. */
+  keys: Record<string, KeyBinding>;
+  /** Knob only. The direction of the first turn picks the target; further
+   * turns either way adjust it until the knob rests for 3 seconds. */
+  knob?: { right?: KnobTarget; left?: KnobTarget };
+}
+
 export interface Profile {
   id: string;
   name: string;
   isDefault: boolean;
   showName: boolean;
   widgets: Widget[];
+  modules?: ModuleSetup[];
+}
+
+/** Where a module is drawn next to the bar preview. Only kept in this app. */
+export interface ModulePlacement {
+  side: "left" | "right";
+  /** Position along that side, from the bar outwards. */
+  order: number;
 }
 
 export interface Trigger {
@@ -127,6 +173,8 @@ export interface Doc {
   modules: ModuleEndpoint[];
   /** Only push the module list once the user manages modules here. */
   modulesManaged: boolean;
+  /** Keyed by serial number. Not sent to the bar. */
+  modulePlacement?: Record<string, ModulePlacement>;
   deployedHash?: string;
   deployedAt?: number;
   deployedTo?: string;

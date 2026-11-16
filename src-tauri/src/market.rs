@@ -26,7 +26,7 @@ const MAX_PACK: usize = 20 << 20;
 const MAX_CONFIG: u64 = 1 << 20;
 const MAX_IMAGE: u64 = 2 << 20;
 
-fn client() -> &'static reqwest::Client {
+pub(crate) fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         // reqwest is built without a crypto provider; use the one the rest of the app uses.

@@ -1,26 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Boxes, Check, Circle, Cpu, Dices, Gauge, Plus, Radar, ScanSearch, Trash2 } from "lucide-react";
+import { Boxes, Check, Info, Plus, ScanSearch, Trash2 } from "lucide-react";
+import { PRODUCTS, productKey } from "../lib/modules";
 import { ACT, api, errorMessage, on, type PushEnvelope } from "../lib/api";
 import { useApp } from "../lib/store";
 import type { ModuleEndpoint } from "../lib/model";
 import { Button, Empty, InlineInput, Spinner } from "../components/ui";
-
-const PRODUCTS: Record<string, { name: string; icon: typeof Boxes }> = {
-  DOT_KEY: { name: "Dot Key", icon: Circle },
-  KNOB_KEY: { name: "Knob", icon: Gauge },
-  VIVO_CUBE: { name: "Vivo Cube", icon: Dices },
-  SENSE_CUBE: { name: "Sense Cube", icon: Radar },
-  PC_POWER_CARD: { name: "PC Power Card", icon: Cpu },
-  EXT_SCREEN: { name: "Extension Screen", icon: Boxes },
-};
-const NUMERIC: Record<number, string> = {
-  0x10000000: "EXT_SCREEN", 0x10000001: "DOT_KEY", 0x10000002: "KNOB_KEY", 0x10000003: "VIVO_CUBE", 0x10000004: "SENSE_CUBE", 0x10000005: "PC_POWER_CARD",
-};
-
-function productKey(p: unknown): string {
-  if (typeof p === "number") return NUMERIC[p] ?? String(p);
-  return String(p ?? "");
-}
 
 /** Discovery replies carry the module's endpoint as JSON; field names vary
  * slightly between module types, so read them leniently. */
@@ -80,8 +64,10 @@ export function ModulesView() {
     }
   };
 
-  const add = (m: ModuleEndpoint) => s.update((d) => { d.modulesManaged = true; d.modules.push(m); });
-  const added = (m: ModuleEndpoint) => doc.modules.some((x) => x.uid === m.uid && x.serialNumber === m.serialNumber);
+  const add = (m: ModuleEndpoint) => void s.addModule(m);
+  const added = (m: ModuleEndpoint) => doc.modules.some((x) => x.serialNumber === m.serialNumber);
+  const onlineMap = useApp((st) => st.moduleOnline);
+  useEffect(() => { void s.loadModuleState(); }, [doc.modules.length, online, s]);
 
   return (
     <div className="page">
@@ -89,7 +75,7 @@ export function ModulesView() {
         <div className="page-head">
           <div className="grow">
             <h1>Modules</h1>
-            <p>Add-on keys, knobs and cubes that attach to the bar. Modules you add here are sent to the bar with Deploy.</p>
+            <p>Add-on keys, knobs and cubes that attach to the bar. Once added, they appear next to the bar in each profile, where you choose what their keys do.</p>
           </div>
           <Button variant={doc.modules.length ? "default" : "primary"} disabled={!online || scanning} onClick={() => void scan()}>
             {scanning ? <Spinner /> : <ScanSearch size={14} />} {scanning ? "Scanning…" : "Scan for modules"}
@@ -106,6 +92,13 @@ export function ModulesView() {
           </section>
         )}
 
+        {doc.modulesManaged && doc.modules.length > 0 && (
+          <div className="callout">
+            <Info size={14} />
+            <div>Deploy sends this list to the bar, and the bar forgets modules that aren't on it. Keep every module you use here.</div>
+          </div>
+        )}
+
         <section>
           {doc.modules.length > 0 && <h3 className="section-title">Your modules</h3>}
           <div className="group">
@@ -116,9 +109,15 @@ export function ModulesView() {
               </Empty>
             ) : (
               doc.modules.map((m, i) => (
-                <ModuleRow key={`${m.uid}:${i}`} m={m} editable
+                <ModuleRow key={`${m.uid}:${i}`} m={m} editable online={online ? onlineMap[m.serialNumber] : undefined}
                   onRename={(name) => s.update((d) => { d.modules[i].name = name; })}
-                  action={<Button variant="ghost" icon size="sm" className="danger" title="Remove" onClick={() => s.update((d) => { d.modules.splice(i, 1); })}><Trash2 size={14} /></Button>} />
+                  action={<Button variant="ghost" icon size="sm" className="danger" title="Remove" onClick={() => s.update((d) => {
+                    const serial = d.modules[i].serialNumber;
+                    d.modules.splice(i, 1);
+                    // Its key setups and position go too.
+                    for (const p of d.profiles) p.modules = p.modules?.filter((x) => x.serialNumber !== serial);
+                    if (d.modulePlacement) delete d.modulePlacement[serial];
+                  })}><Trash2 size={14} /></Button>} />
               ))
             )}
           </div>
@@ -128,7 +127,7 @@ export function ModulesView() {
   );
 }
 
-function ModuleRow({ m, action, editable, onRename }: { m: ModuleEndpoint; action: React.ReactNode; editable?: boolean; onRename?: (n: string) => void }) {
+function ModuleRow({ m, action, editable, onRename, online }: { m: ModuleEndpoint; action: React.ReactNode; editable?: boolean; onRename?: (n: string) => void; online?: boolean }) {
   const product = PRODUCTS[m.productId];
   const Icon = product?.icon ?? Boxes;
   return (
@@ -138,6 +137,7 @@ function ModuleRow({ m, action, editable, onRename }: { m: ModuleEndpoint; actio
         {editable && onRename ? <InlineInput className="input" value={m.name} onCommit={onRename} /> : <b>{m.name}</b>}
         <span>{product?.name ?? m.productId} · {m.serialNumber || m.uid}{m.interfaceType === "mesh" ? " · wireless" : ""}</span>
       </div>
+      {online !== undefined && <span className={`chip${online ? " ok" : ""}`}>{online ? "Attached" : "Not attached"}</span>}
       {action}
     </div>
   );

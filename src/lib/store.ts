@@ -1,12 +1,12 @@
 import { create } from "zustand";
 import {
   ACT, APP_TYPE, api, errorMessage, firmwareBefore, on,
-  type AppInfo, type BarStatus, type PcActionEvent, type PushEnvelope, type StoreApp, type StorePlugin,
+  type AppInfo, type BarStatus, type DiscordStatus, type PcActionEvent, type PushEnvelope, type StoreApp, type StorePlugin,
 } from "./api";
-import type { Automation, Doc, Profile, Widget } from "./model";
+import type { Automation, Doc, ModuleEndpoint, ModulePlacement, ModuleSetup, Profile, Widget } from "./model";
 import { uid } from "./model";
-import { PC_ACTIONS, newWidget } from "./widgets";
-import { buildPlan, docHash, fitsOneLine, lineSize } from "./deploy";
+import { newWidget, pcMeta } from "./widgets";
+import { buildPlan, docHash, fitsOneLine, lineSize, modulesPayload } from "./deploy";
 import { cardArtPng, glyphPng } from "./icons";
 
 export type View =
@@ -110,12 +110,22 @@ interface Catalog {
   loaded: boolean;
 }
 
+export const HA_PACKAGE = "com.ultrabar.homeassistant";
+
 interface State {
   ready: boolean;
   info: AppInfo | null;
   doc: Doc;
   view: View;
   selected: string | null;
+  /** Serial number of the module selected in the bar preview. */
+  selectedModule: string | null;
+  /** Serial number → attached and running, as the bar reports it. */
+  moduleOnline: Record<string, boolean>;
+  /** Whether the bar's Home Assistant app is logged in to Home Assistant
+   * (null: unknown, e.g. the app isn't installed). */
+  haLoggedIn: boolean | null;
+  discord: DiscordStatus | null;
   status: BarStatus;
   catalog: Catalog;
   deploy: DeployState;
@@ -133,6 +143,15 @@ interface State {
   redo(): void;
   setView(v: View): void;
   select(uid: string | null): void;
+  selectModule(serial: string | null): void;
+  loadModuleState(): Promise<void>;
+  loadHaStatus(): Promise<void>;
+  refreshDiscord(check?: boolean): Promise<void>;
+  /** Adds a module found by a scan. Modules the bar already knows don't make
+   * Deploy take over the bar's module list. */
+  addModule(m: ModuleEndpoint): Promise<void>;
+  updateModuleSetup(profileId: string, m: Pick<ModuleEndpoint, "serialNumber" | "productId">, mutate: (s: ModuleSetup) => void, coalesce?: string): void;
+  setModulePlacement(serial: string, p: ModulePlacement): void;
   setConnectOpen(open: boolean): void;
   toast(t: Omit<Toast, "id">): void;
   dismissToast(id: string): void;
@@ -155,6 +174,12 @@ interface State {
 }
 
 const kb = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`;
+
+/** Home Assistant entity types the bar has cards for. */
+const HA_CARD_TYPES = new Set([
+  "SWITCH", "SCENE", "CURTAIN_SWITCH", "CURTAIN", "LIGHT", "LIGHT_TEMP", "LIGHT_HS", "LIGHT_HS_TEMP", "AC", "FAN",
+  "TEMPERATURE_SENSOR", "HUMIDITY_SENSOR", "AUDIO_PLAYER",
+]);
 
 function defaultDoc(): Doc {
   const id = "profile_" + uid();
@@ -203,6 +228,10 @@ export const useApp = create<State>((set, get) => ({
   doc: defaultDoc(),
   view: { kind: "profile", id: "" },
   selected: null,
+  selectedModule: null,
+  moduleOnline: {},
+  haLoggedIn: null,
+  discord: null,
   status: { state: "idle", bar: null, error: null, localIp: null },
   catalog: { apps: [], devices: [], triggers: [], loaded: false },
   deploy: { phase: "idle" },
@@ -236,8 +265,12 @@ export const useApp = create<State>((set, get) => ({
       set({ status: s });
       if (s.state === "online" && prev !== "online") {
         void get().loadCatalog();
+        void get().loadModuleState();
         void checkAppJobs(0);
       }
+    });
+    await on<{ serialNo?: string; online?: boolean }>("module-state", (m) => {
+      if (m.serialNo) set({ moduleOnline: { ...get().moduleOnline, [m.serialNo]: !!m.online } });
     });
     await on<PcActionEvent>("pc-action", (e) => {
       set({ pcLog: [e, ...get().pcLog].slice(0, 50) });
@@ -247,7 +280,11 @@ export const useApp = create<State>((set, get) => ({
       if (e.act === ACT.appManagerEvent) onAppEvent(e.data);
     });
     setInterval(() => void checkAppJobs(60_000), 20_000);
-    if (status?.state === "online") void get().loadCatalog();
+    if (status?.state === "online") {
+      void get().loadCatalog();
+      void get().loadModuleState();
+    }
+    void get().refreshDiscord();
   },
 
   update(mutate, coalesce, silent) {
@@ -287,10 +324,72 @@ export const useApp = create<State>((set, get) => ({
   },
 
   setView(v) {
-    set({ view: v, selected: null });
+    set({ view: v, selected: null, selectedModule: null });
   },
   select(wuid) {
-    set({ selected: wuid });
+    set({ selected: wuid, selectedModule: null });
+  },
+  selectModule(serial) {
+    set({ selectedModule: serial, selected: null });
+  },
+
+  async loadModuleState() {
+    const serials = get().doc.modules.map((m) => m.serialNumber).filter(Boolean);
+    if (!serials.length || get().status.state !== "online") return;
+    // Unknown serial numbers come back offline too.
+    const r = await api.request<{ serialNo: string; online: boolean }[]>(ACT.moduleState, serials).catch(() => null);
+    if (Array.isArray(r)) set({ moduleOnline: Object.fromEntries(r.map((x) => [x.serialNo, !!x.online])) });
+  },
+
+  async loadHaStatus() {
+    const app = get().catalog.apps.find((a) => a.application === HA_PACKAGE);
+    if (!app?.port || get().status.state !== "online") {
+      set({ haLoggedIn: null });
+      return;
+    }
+    set({ haLoggedIn: await api.haLoggedIn(app.port).catch(() => null) });
+  },
+
+  async refreshDiscord(check) {
+    try {
+      set({ discord: check ? await api.discordCheck() : await api.discordStatus() });
+    } catch (e) {
+      // check() fails when Discord isn't running or the sign-in expired.
+      const st = await api.discordStatus().catch(() => null);
+      set({ discord: st ? { ...st, error: errorMessage(e) } : null });
+    }
+  },
+
+  async addModule(m) {
+    const known = await api.request<{ serialNo: string; online: boolean }[]>(ACT.moduleState, [m.serialNumber]).catch(() => null);
+    const onBar = Array.isArray(known) && known.some((x) => x.serialNo === m.serialNumber && x.online);
+    get().update((d) => {
+      if (!d.modules.some((x) => x.serialNumber === m.serialNumber)) d.modules.push(m);
+      // A module the bar doesn't know yet only works after Deploy sends the
+      // module list, which from then on replaces the bar's own.
+      if (!onBar) d.modulesManaged = true;
+    });
+    set({ moduleOnline: { ...get().moduleOnline, [m.serialNumber]: onBar } });
+  },
+
+  updateModuleSetup(profileId, m, mutate, coalesce) {
+    get().update((d) => {
+      const p = d.profiles.find((x) => x.id === profileId);
+      if (!p) return;
+      p.modules ??= [];
+      let setup = p.modules.find((x) => x.serialNumber === m.serialNumber);
+      if (!setup) {
+        setup = { serialNumber: m.serialNumber, productId: m.productId, keys: {} };
+        p.modules.push(setup);
+      }
+      mutate(setup);
+    }, coalesce ? `${profileId}:${m.serialNumber}:${coalesce}` : undefined);
+  },
+
+  setModulePlacement(serial, placement) {
+    get().update((d) => {
+      d.modulePlacement = { ...d.modulePlacement, [serial]: placement };
+    });
   },
   setConnectOpen(open) {
     set({ connectOpen: open });
@@ -320,11 +419,13 @@ export const useApp = create<State>((set, get) => ({
           const o = d as Record<string, unknown>;
           const id = String(o.id ?? o.entityId ?? "");
           const deviceType = String(o.deviceType ?? o.type ?? "");
-          return id && deviceType ? [{ id, name: String(o.name ?? id), deviceType }] : [];
+          // Home Assistant entities ("light.kitchen"); the list can also hold modules.
+          return id.includes(".") && HA_CARD_TYPES.has(deviceType) ? [{ id, name: String(o.name ?? id), deviceType }] : [];
         }),
         loaded: true,
       },
     });
+    void get().loadHaStatus();
   },
 
   async loadMarket(force) {
@@ -388,7 +489,7 @@ export const useApp = create<State>((set, get) => ({
           return w.icon.kind === "url" ? w.icon.url : publish(w.icon.png);
         },
         async (w) => {
-          const fallback = w.type === "PC_CONTROL" && w.pc ? PC_ACTIONS[w.pc.action].glyph : w.type === "HOT_KEY_GROUP" ? "layout-grid" : "layers";
+          const fallback = w.type === "PC_CONTROL" && w.pc ? pcMeta(w.pc).glyph : w.type === "HOT_KEY_GROUP" ? "layout-grid" : "layers";
           const icon = w.icon?.kind === "url" ? w.icon.url : w.icon?.png ?? (await glyphPng(fallback, "#ffffff"));
           return publish(await cardArtPng(w.bgColor ?? "#24252b", icon, w.iconScale));
         },
@@ -413,10 +514,20 @@ export const useApp = create<State>((set, get) => ({
         progress("Sending modules");
         await api.request(ACT.coreBarConfig, plan.modules);
       }
+      let sentHa = false;
       if (plan.appConfigs.length) {
         progress("Sending integrations");
+        const { catalog } = get();
         for (const cfg of plan.appConfigs) {
-          await api.request(ACT.appConfig, cfg, 10000).catch((e) => {
+          // The bar drops Home Assistant settings without a reply when its
+          // Home Assistant app isn't installed.
+          if (cfg.packageName === HA_PACKAGE && catalog.loaded && !catalog.apps.some((a) => a.application === HA_PACKAGE)) {
+            warnings.push("Home Assistant: install the Home Assistant app on the bar (Apps), then deploy again.");
+            continue;
+          }
+          await api.request(ACT.appConfig, cfg, 10000).then(() => {
+            if (cfg.packageName === HA_PACKAGE) sentHa = true;
+          }).catch((e) => {
             const name = cfg.packageName.endsWith("weather") ? "Weather" : "Home Assistant";
             warnings.push(`${name}: ${errorMessage(e)}`);
           });
@@ -435,8 +546,20 @@ export const useApp = create<State>((set, get) => ({
       // 1.0.9 also doesn't redraw after a save, so ask it to.
       const view = get().view;
       const showId = view.kind === "profile" ? view.id : (doc.profiles.find((p) => p.isDefault) ?? doc.profiles[0]).id;
+      // Modules only reload their key assignments when the bar switches
+      // profiles, so switch away and back if the shown profile has some.
+      const shown = doc.profiles.find((p) => p.id === showId);
+      const other = doc.profiles.find((p) => p.id !== showId);
+      if (shown && other && modulesPayload(shown).length) {
+        await api.request(ACT.switchProfile, other.id).catch(() => {});
+        await new Promise((r) => setTimeout(r, 700));
+      }
       await api.request(ACT.switchProfile, showId).catch(() => {});
       await api.refreshScreen().catch(() => {});
+      if (sentHa) {
+        // The Home Assistant app connects in the background; pick up its devices.
+        for (const ms of [4000, 15000]) setTimeout(() => void get().loadCatalog().then(() => get().loadHaStatus()), ms);
+      }
 
       const serial = get().status.bar?.serialNo;
       const hash = docHash(doc);
@@ -601,8 +724,9 @@ async function checkAppJobs(quietFor: number) {
 }
 
 function fixSelection() {
-  const { selected, doc, view } = useApp.getState();
+  const { selected, selectedModule, doc, view } = useApp.getState();
   if (selected && !findWidget(doc, selected)) useApp.setState({ selected: null });
+  if (selectedModule && !doc.modules.some((m) => m.serialNumber === selectedModule)) useApp.setState({ selectedModule: null });
   if (view.kind === "profile" && !doc.profiles.some((p) => p.id === view.id)) {
     useApp.setState({ view: { kind: "profile", id: doc.profiles[0].id } });
   }

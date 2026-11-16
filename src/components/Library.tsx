@@ -3,7 +3,7 @@ import { useDraggable } from "@dnd-kit/core";
 import { LayoutGrid, Plus, Search } from "lucide-react";
 import { useApp } from "../lib/store";
 import type { PcAction, Widget, WidgetType } from "../lib/model";
-import { PC_ACTIONS, WIDGETS, newWidget } from "../lib/widgets";
+import { DISCORD_OPS, DISCORD_ORDER, PC_ACTIONS, WIDGETS, newWidget, pcMeta } from "../lib/widgets";
 import { glyphPng } from "../lib/icons";
 import { barAppIconUrl } from "../lib/deploy";
 import { PackBrowser } from "./PackBrowser";
@@ -20,7 +20,7 @@ function addWidget(profileId: string, w: Widget, index?: number) {
   useApp.getState().addWidget(profileId, w, index);
   // Icon-only cards get a matching symbol right away.
   if (w.type === "PC_CONTROL" || w.type === "SCENE") {
-    const glyph = w.type === "SCENE" ? "layers" : PC_ACTIONS[w.pc!.action].glyph;
+    const glyph = w.type === "SCENE" ? "layers" : pcMeta(w.pc).glyph;
     void glyphPng(glyph, "#ffffff").then((png) =>
       useApp.getState().updateWidget(w.uid, (x) => { if (!x.icon) x.icon = { kind: "glyph", glyph, color: "#ffffff", png }; }, undefined, true),
     );
@@ -65,6 +65,17 @@ export function Library({ profileId }: { profileId: string }) {
           pcItem("execCmd", "Run a shell command"),
           pcItem("inputText", "Type a snippet of text"),
         ],
+      },
+      {
+        title: "Discord",
+        items: DISCORD_ORDER.map((op) => {
+          const d = DISCORD_OPS[op];
+          const Icon = d.icon;
+          return {
+            key: `discord:${op}`, label: d.label, sub: "Through the Discord app on this computer", icon: <Icon size={16} />,
+            add: (pid: string, i?: number) => addWidget(pid, newWidget("PC_CONTROL", { pc: { action: "discord", discord: { op } } }), i),
+          };
+        }),
       },
       { title: "Automation", items: [basic("SCENE", "Run several actions with one tap")] },
       {

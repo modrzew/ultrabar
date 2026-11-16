@@ -10,7 +10,7 @@ import { ACT, api } from "../lib/api";
 import { useApp, type Component, type TreeNode } from "../lib/store";
 import type { Action, PcControl } from "../lib/model";
 import { uid } from "../lib/model";
-import { PC_ACTIONS, pcIsComplete, pcSummary } from "../lib/widgets";
+import { pcIsComplete, pcMeta, pcSummary } from "../lib/widgets";
 import { tr } from "../lib/i18n";
 import { Button, Field, Modal, Slider, Spinner } from "./ui";
 import { PcControlEditor } from "./editors/PcControlEditor";
@@ -76,7 +76,7 @@ const BRANCH_NAME: Record<string, string> = { "sc.corebar": "Bar", "sc.devices":
 
 export function actionIcon(a: { type?: string; pc?: PcControl }, size = 14): ReactNode {
   if (a.type === "PC_CONTROL") {
-    const I = a.pc ? PC_ACTIONS[a.pc.action].icon : Command;
+    const I = a.pc ? pcMeta(a.pc).icon : Command;
     return <I size={size} />;
   }
   const map: Record<string, ReactNode> = {
@@ -214,7 +214,9 @@ export function ActionPicker({ initial, onClose, onSave }: { initial?: Action; o
     if (!node) return;
     const base = { uid: initial?.uid ?? uid("a"), nodeId: node.id, type: node.type ?? "", name: node.name, objectName: node.objectName, objectParams: node.objectParams };
     if (node.type === "PC_CONTROL") {
-      onSave({ ...base, values: [], pc, summary: `${PC_ACTIONS[pc.action].label}: ${pcSummary(pc)}` });
+      const meta = pcMeta(pc);
+      const detail = pcSummary(pc);
+      onSave({ ...base, values: [], pc, summary: detail === meta.label ? (pc.action === "discord" ? `Discord: ${detail}` : detail) : `${meta.label}: ${detail}` });
     } else {
       const vals = comps.map((c) => ({ id: c.id, value: coerce(c, values[c.id]) }));
       onSave({ ...base, values: vals, summary: summarize(node, values) });

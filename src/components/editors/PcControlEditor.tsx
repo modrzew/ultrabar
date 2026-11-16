@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, Keyboard, Play, RotateCcw } from "lucide-react";
-import type { PcAction, PcControl } from "../../lib/model";
-import { PC_ACTIONS, pcIsComplete, pcPayload } from "../../lib/widgets";
+import { FolderOpen, Info, Keyboard, Play, RefreshCw, RotateCcw } from "lucide-react";
+import type { DiscordAction, DiscordOp, PcAction, PcControl } from "../../lib/model";
+import { DISCORD_OPS, DISCORD_ORDER, PC_ACTIONS, pcIsComplete, pcPayload } from "../../lib/widgets";
 import { hidFromCode, isMac, isModifier, keyLabel, sortKeys } from "../../lib/hid";
-import { api, errorMessage, isTauri } from "../../lib/api";
+import { api, errorMessage, isTauri, type DiscordGuild, type DiscordSound } from "../../lib/api";
 import { useApp } from "../../lib/store";
-import { Button, Field } from "../ui";
+import { Button, Field, Spinner } from "../ui";
 
-const ORDER: PcAction[] = ["hotkey", "startApp", "openBrowser", "openFile", "execCmd", "inputText"];
+const ORDER: PcAction[] = ["hotkey", "startApp", "openBrowser", "openFile", "execCmd", "inputText", "discord"];
 
 export function PcControlEditor({ value, onChange }: { value: PcControl; onChange: (pc: PcControl, coalesceKey?: string) => void }) {
   const [testing, setTesting] = useState(false);
@@ -29,7 +29,10 @@ export function PcControlEditor({ value, onChange }: { value: PcControl; onChang
   return (
     <div className="stack" style={{ gap: 14 }}>
       <Field label="Action">
-        <select className="select" value={value.action} onChange={(e) => onChange({ action: e.target.value as PcAction, keys: e.target.value === "hotkey" ? [] : undefined })}>
+        <select className="select" value={value.action} onChange={(e) => {
+          const action = e.target.value as PcAction;
+          onChange({ action, keys: action === "hotkey" ? [] : undefined, discord: action === "discord" ? { op: "toggleMute" } : undefined });
+        }}>
           {ORDER.map((a) => <option key={a} value={a}>{PC_ACTIONS[a].label}</option>)}
         </select>
       </Field>
@@ -68,6 +71,10 @@ export function PcControlEditor({ value, onChange }: { value: PcControl; onChang
         </Field>
       )}
 
+      {value.action === "discord" && (
+        <DiscordEditor value={value.discord ?? { op: "toggleMute" }} onChange={(discord) => onChange({ ...value, discord })} />
+      )}
+
       {value.action !== "hotkey" && (
         <div>
           <Button size="sm" onClick={() => void test()} disabled={!pcIsComplete(value) || testing}>
@@ -76,6 +83,100 @@ export function PcControlEditor({ value, onChange }: { value: PcControl; onChang
         </div>
       )}
     </div>
+  );
+}
+
+function DiscordEditor({ value, onChange }: { value: DiscordAction; onChange: (d: DiscordAction) => void }) {
+  const status = useApp((s) => s.discord);
+  const need = DISCORD_OPS[value.op].needs;
+  const ready = !!status?.configured && !!status.signedIn;
+  return (
+    <>
+      <Field label="Discord action">
+        <select className="select" value={value.op} onChange={(e) => onChange({ op: e.target.value as DiscordOp })}>
+          {DISCORD_ORDER.map((op) => <option key={op} value={op}>{DISCORD_OPS[op].label}</option>)}
+        </select>
+      </Field>
+      {!ready && (
+        <div className="callout warn">
+          <Info size={14} />
+          <div>
+            Connect this computer to Discord first.{" "}
+            <button className="link" onClick={() => useApp.getState().setView({ kind: "integrations" })}>Set it up in Integrations</button>
+          </div>
+        </div>
+      )}
+      {ready && need === "channel" && <ChannelPicker value={value} onChange={onChange} />}
+      {ready && need === "sound" && <SoundPicker value={value} onChange={onChange} />}
+      {need === "sound" && <p className="faint" style={{ margin: 0, fontSize: 12 }}>Plays in the voice channel you're in. Sounds from other servers need Nitro.</p>}
+    </>
+  );
+}
+
+function useDiscordList<T>(load: () => Promise<T[]>) {
+  const [items, setItems] = useState<T[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const reload = () => {
+    setLoading(true);
+    setError(null);
+    load().then(setItems).catch((e) => setError(errorMessage(e))).finally(() => setLoading(false));
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(reload, []);
+  return { items, error, loading, reload };
+}
+
+function ChannelPicker({ value, onChange }: { value: DiscordAction; onChange: (d: DiscordAction) => void }) {
+  const { items, error, loading, reload } = useDiscordList<DiscordGuild>(api.discordVoiceChannels);
+  const known = items?.some((g) => g.channels.some((c) => c.id === value.channelId));
+  return (
+    <Field label="Voice channel" error={error}
+      aside={<Button variant="ghost" icon size="sm" title="Reload from Discord" onClick={reload} disabled={loading}>{loading ? <Spinner /> : <RefreshCw size={12} />}</Button>}>
+      <select className="select" value={value.channelId ?? ""} disabled={!items}
+        onChange={(e) => {
+          const g = items?.find((x) => x.channels.some((c) => c.id === e.target.value));
+          const c = g?.channels.find((x) => x.id === e.target.value);
+          if (g && c) onChange({ ...value, guildId: g.id, channelId: c.id, label: `${c.name} (${g.name})` });
+        }}>
+        <option value="" disabled>{loading && !items ? "Loading…" : "Choose…"}</option>
+        {value.channelId && !known && <option value={value.channelId}>{value.label ?? "Saved channel"}</option>}
+        {items?.map((g) => (
+          <optgroup key={g.id} label={g.name}>
+            {g.channels.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </optgroup>
+        ))}
+      </select>
+    </Field>
+  );
+}
+
+function SoundPicker({ value, onChange }: { value: DiscordAction; onChange: (d: DiscordAction) => void }) {
+  const { items, error, loading, reload } = useDiscordList<DiscordSound>(api.discordSounds);
+  const groups = new Map<string, DiscordSound[]>();
+  for (const s of items ?? []) {
+    const k = s.guildName || "Discord";
+    groups.set(k, [...(groups.get(k) ?? []), s]);
+  }
+  const key = (s: { guildId?: string; soundId?: string }) => `${s.guildId ?? "0"}:${s.soundId ?? ""}`;
+  const known = items?.some((s) => key(s) === key(value));
+  return (
+    <Field label="Sound" error={error}
+      aside={<Button variant="ghost" icon size="sm" title="Reload from Discord" onClick={reload} disabled={loading}>{loading ? <Spinner /> : <RefreshCw size={12} />}</Button>}>
+      <select className="select" value={value.soundId ? key(value) : ""} disabled={!items}
+        onChange={(e) => {
+          const s = items?.find((x) => key(x) === e.target.value);
+          if (s) onChange({ ...value, guildId: s.guildId, soundId: s.soundId, label: `${s.emoji ? `${s.emoji} ` : ""}${s.name}` });
+        }}>
+        <option value="" disabled>{loading && !items ? "Loading…" : "Choose…"}</option>
+        {value.soundId && !known && <option value={key(value)}>{value.label ?? "Saved sound"}</option>}
+        {[...groups].map(([g, list]) => (
+          <optgroup key={g} label={g}>
+            {list.map((s) => <option key={key(s)} value={key(s)} disabled={!s.available}>{s.emoji ? `${s.emoji} ` : ""}{s.name}{s.available ? "" : " (not available)"}</option>)}
+          </optgroup>
+        ))}
+      </select>
+    </Field>
   );
 }
 

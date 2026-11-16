@@ -9,9 +9,17 @@ import type { Doc } from "../lib/model";
 import { Button, ToggleRow } from "../components/ui";
 import { statusText } from "../components/ConnectSheet";
 
+const DISCORD_VERB: Record<string, string> = {
+  joinVoice: "Join a voice channel", leaveVoice: "Leave voice", toggleMute: "Mute / unmute", toggleDeafen: "Deafen / undeafen",
+  playSound: "Play a soundboard sound", toggleCamera: "Camera on / off", toggleScreenShare: "Screen share on / off",
+};
+
 function describe(payload: unknown): string {
   const p = payload as { action?: string; params?: Record<string, string> } | null;
   if (!p?.action) return "Unknown request";
+  if (p.action === "discord") return `Discord: ${DISCORD_VERB[p.params?.op ?? ""] ?? p.params?.op ?? "?"}`;
+  if (p.action === "SET_VOLUME") return `Set volume to ${String(p.params)}%`;
+  if (p.action === "SET_BRIGHTNESS") return `Set brightness to ${String(p.params)}%`;
   const v = p.params?.url ?? p.params?.path ?? p.params?.cmd ?? p.params?.text ?? "";
   const verb: Record<string, string> = { openBrowser: "Open", startApp: "Open app", openFile: "Open", execCmd: "Run", inputText: "Type" };
   return `${verb[p.action] ?? p.action} ${v}`;
@@ -68,6 +76,7 @@ export function SettingsView() {
         d.integrations = { ...d.integrations, ...doc.integrations };
         d.modules = doc.modules ?? [];
         d.modulesManaged = !!doc.modulesManaged;
+        d.modulePlacement = doc.modulePlacement;
       });
       s.setView({ kind: "profile", id: useApp.getState().doc.profiles[0].id });
       s.toast({ kind: "success", title: "Layout imported", body: "Deploy to send it to your bar. ⌘Z undoes the import." });

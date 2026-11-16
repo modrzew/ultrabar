@@ -527,3 +527,39 @@ A pack zip has `config.json` `{name, identifier, icon, versionCode, button: [...
 
 The official app deploys a pack as one `HOT_KEY_GROUP` widget with `param: {button: [...]}`. On the bar it's an icon card with the name at the bottom, drawn like `PC_CONTROL` (`getScaledBitmap(265, 245, …)`). Tapping it opens a page with the buttons in two rows, scrolling sideways; `spanSize: 2` buttons take both rows. Button icons load like card icons and are drawn at `iconScale` (40 if missing). Taps and long presses run `output 5`/`10` like `PC_CONTROL` cards. Buttons whose `type` isn't `PC_CONTROL` do nothing **[code]**. Everything has to fit in the single `1108` line (8 KB), so large packs (Emoji has 64 buttons) need trimming.
 
+
+# Modules, Home Assistant and the computer (2026-11-15)
+
+Verified against the live bar (launcher 1.0.9, and a hub that now reports `1.0.9(9)` in discovery) unless marked **[code]** (launcher 1.0.9, the official desktop app, or the Home Assistant bar app).
+
+## Bar state after the hub update
+Discovery now reports `ver: "1.0.9(9)"` (the hub was 1.0.1). The update cleared all pairings again, and ADB on 5555 no longer accepts connections.
+
+## Finding and checking modules
+- `30102` discovery events carry the endpoint without a uid: `{interfaceType, workMode, productId: 268435457, serialNumber, netId}`. `productId` is numeric here (`0x10000001` = `DOT_KEY`, `0x10000002` = `KNOB_KEY`). The bar's stored config uses the name and `uid = netId` as a string.
+- A scan also reports modules the bar already has, repeating each about every 5 s.
+- `30730` takes **serial numbers**: `["0000019F2AB98C7F", …]` → `[{serialNo, online}]`. Unknown serials come back `online: false`.
+- The bar can't report its module list: `30740` with `GATEWAY_CONFIG` has no read handler **[code]**. A module the bar knows is `online: true` while attached, so `30730` right after a scan tells known modules from new ones.
+- Nothing tells where a module is attached. Endpoints only have uid, serial, product, netId, workMode and extraConfig, and the CAN bus is shared.
+- `MODULE_STATE` pushes (`act 1000000`, `type: MODULE_STATE`, `payload: {serialNo, online}`) report attach and detach.
+
+## Module keys (profile `module` list in `1108`) **[code]**
+Each profile's `module` array holds `{productId: "DOT_KEY"|"KNOB_KEY"|…, serialNo, config}` (product by name or number). The launcher matches `serialNo` against the stored gateway endpoints, so the module must already be in the bar's config.
+- **Dot Key**: `config` = `[{keyCode, singleClick?, doubleClick?, longPress?}]`. Each gesture is a scene: `{name, icon?, show, actions: [ActionConfig]}` (the same actions as multi-action cards). With `show: true` the bar briefly shows `name`/`icon` when it runs. The official app's drawing maps `button1` (top left, round) → key code **2**, `button2` (bottom left, round) → **1**, `button3` (right, tall) → **0**. Confirmed on the bar: all three keys and all three gestures arrive with these codes.
+- **Knob**: `config` = `{button?: {keyCode: 0, singleClick?, …}, clockwise?: {id, type}, counterclockwise?: {id, type}}`. The first turn's direction picks `clockwise` or `counterclockwise`. Further turns either way adjust that target (right = up) until the knob rests for 3 s.
+- Confirmed on the bar: the Knob's press is key code 0 (click, double click, hold), and `counterclockwise: local:bright` changes the bar's brightness.
+- A module the bar has forgotten still shows up in a scan but stays `online: false` in `30730`. Sending `30300` with it (and every other module) brings it back, `online: true` within seconds.
+- Knob targets come from `1617` (a lazy tree like `1205`): root branches `pc:root`, `local:root`, `light`, `air`, `fan`, `curtain`, `audio_player`. Leaves are `{id, name, last: true, type}` with `type` ∈ `PC_VOLUME`, `PC_BRIGHT` (ids `pc:volume`, `pc:bright`), `LOCAL_VOLUME`, `LOCAL_BRIGHT` (`local:volume`, `local:bright`), or a Home Assistant entity (`LIGHT_TEMP`, `LIGHT_HS`, `LIGHT_HS_TEMP`, `AC`, `CURTAIN`, `FAN`, `AUDIO_PLAYER`).
+- Key presses are **not** automation triggers (`30700` only offers `DEVICE_STATE`, `PROFILE`, `APP_STATE`) and aren't pushed to computers.
+- After `1108` the scenes are re-registered, but a module only reloads which keys are assigned when the bar switches profiles (`SwitchModuleConfigEvent`) or the launcher resumes. Switching to another profile and back applies new assignments on the current profile.
+
+## Knob → computer pushes **[code]**
+A knob bound to `pc:volume` or `pc:bright` pushes `{type: "SET_VOLUME"|"SET_BRIGHTNESS", payload: <0–100>}`. While bound, it polls `GET_VOLUME`/`GET_BRIGHTNESS` every 5 s and expects reply `data` = `{type, payload: <int>}`.
+
+## Home Assistant **[code]** / live
+- The bar's Home Assistant support is a separate store app, `com.ultrabar.homeassistant` (1.0.4). Without it the launcher drops `1010` for that package **without replying**. The launcher binds to the app's `IOTService` every 5 s until it's installed.
+- `1010` passes `{url, token}` to the app over IPC. The app builds its websocket address as `url.replace("http", "ws") + "api/websocket"`, so the URL needs a scheme and a **trailing slash**.
+- The app exposes every entity of a supported type (switch, scene, light, climate, cover, fan, sensors, media player). Nothing has to be picked in the app. `1300` lists them as `{id: "<entity_id>", name, deviceType}` (it can also list module devices).
+- The app's web server (port from `1000`, `config: true`) answers `GET /status` with `{"status":"success","data":<logged in>}` without a session token.
+- Home Assistant scene cards are `SCENE` widgets with the entity id and `param: {type: "HA_SCENE"}`.
+- An address behind Cloudflare Access (or any login page) can't work: the websocket upgrade gets a 302 to the login page.

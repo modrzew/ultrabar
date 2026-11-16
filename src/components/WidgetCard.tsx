@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { CloudSun, Layers, LayoutGrid, Lightbulb, Settings2 } from "lucide-react";
 import type { Widget } from "../lib/model";
-import { PC_ACTIONS, SOUNDSCAPES, WIDGETS, formatDuration, pcIsComplete } from "../lib/widgets";
+import { SOUNDSCAPES, WIDGETS, formatDuration, pcIsComplete, pcMeta } from "../lib/widgets";
 import { timeIn, zoneCity } from "../lib/timezones";
 import { barAppIconUrl } from "../lib/deploy";
 import { useApp } from "../lib/store";
@@ -152,7 +152,7 @@ function AppFace({ w }: { w: Widget }) {
 }
 
 function IconFace({ w }: { w: Widget }) {
-  const Fallback = w.type === "SCENE" ? Layers : w.type === "HOT_KEY_GROUP" ? LayoutGrid : PC_ACTIONS[w.pc?.action ?? "hotkey"].icon;
+  const Fallback = w.type === "SCENE" ? Layers : w.type === "HOT_KEY_GROUP" ? LayoutGrid : pcMeta(w.pc).icon;
   const src = w.icon ? (w.icon.kind === "url" ? w.icon.url : w.icon.png) : null;
   const size = `${Math.max(10, Math.min(100, w.iconScale))}%`;
   return (
