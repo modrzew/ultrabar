@@ -72,8 +72,11 @@ jobs:
           security find-identity -p codesigning "$keychain"
 
       - uses: oven-sh/setup-bun@v2.2.0
-      - uses: dtolnay/rust-toolchain@stable
+      # @master, not @stable: upstream rewrites its stable branch whenever master changes,
+      # which leaves the commit in actions.lock unreachable.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: stable
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2.9.3
         with:
@@ -135,8 +138,11 @@ jobs:
           fi
 
       - uses: oven-sh/setup-bun@v2.2.0
-      - uses: dtolnay/rust-toolchain@stable
+      # @master, not @stable: upstream rewrites its stable branch whenever master changes,
+      # which leaves the commit in actions.lock unreachable.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: stable
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2.9.3
         with:
