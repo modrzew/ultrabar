@@ -1,5 +1,5 @@
 // Turns the layout document into the messages the bar expects.
-import type { Action, Doc, Widget } from "./model";
+import type { Action, Doc, KeyBinding, KeyEvent, ModuleSetup, Profile, Widget } from "./model";
 import { hms, pcIsComplete, pcParam, pcPayload } from "./widgets";
 import { zoneOffset } from "./timezones";
 
@@ -72,6 +72,8 @@ export function widgetPayload(w: Widget, iconUrl?: string, buttonIcons: (string 
       break;
     case "DEVICE":
       if (w.device) p.type = w.device.deviceType;
+      // Home Assistant scenes are SCENE cards that run the entity (the id).
+      if (w.device?.deviceType === "SCENE") p.param = { type: "HA_SCENE" };
       break;
     case "HOT_KEY_GROUP":
       // Tapping the card opens a page with these buttons in two rows. Kept
@@ -99,6 +101,65 @@ export function actionPayload(a: Action): Record<string, unknown> {
   return p;
 }
 
+/** The address the bar's Home Assistant app connects to. It appends
+ * `api/websocket` to it as is, so it needs a scheme and a trailing slash. */
+export function haUrl(raw: string): string {
+  let u = raw.trim();
+  if (!u) return "";
+  if (!/^https?:\/\//i.test(u)) u = `http://${u}`;
+  try {
+    const url = new URL(u);
+    return `${url.protocol}//${url.host}/`;
+  } catch {
+    return u.endsWith("/") ? u : `${u}/`;
+  }
+}
+
+export const KEY_EVENTS: { key: KeyEvent; field: string; label: string }[] = [
+  { key: "click", field: "singleClick", label: "Click" },
+  { key: "double", field: "doubleClick", label: "Double click" },
+  { key: "long", field: "longPress", label: "Long press" },
+];
+
+function hasActions(b: KeyBinding | undefined) {
+  return !!b && KEY_EVENTS.some((e) => b[e.key]?.length);
+}
+
+/** `KeyCodeConfig`: a key code and a scene per gesture. The bar shows the
+ * scene's name when it runs, so it's named after its first action. */
+function keyPayload(code: string, b: KeyBinding): Record<string, unknown> {
+  const out: Record<string, unknown> = { keyCode: Number(code) };
+  for (const e of KEY_EVENTS) {
+    const actions = b[e.key];
+    if (!actions?.length) continue;
+    out[e.field] = { name: (actions[0].summary || actions[0].name).slice(0, 40), show: true, actions: actions.map(actionPayload) };
+  }
+  return out;
+}
+
+/** A profile's `module` list: what each module's keys (and a knob's turns) do. */
+export function modulesPayload(p: Profile): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  for (const m of p.modules ?? []) {
+    const keys = Object.entries(m.keys ?? {}).filter(([, b]) => hasActions(b));
+    if (m.productId === "KNOB_KEY") {
+      const config: Record<string, unknown> = {};
+      const button = keys.find(([code]) => code === "0");
+      if (button) config.button = keyPayload("0", button[1]);
+      if (m.knob?.right) config.clockwise = { id: m.knob.right.id, type: m.knob.right.type };
+      if (m.knob?.left) config.counterclockwise = { id: m.knob.left.id, type: m.knob.left.type };
+      if (Object.keys(config).length) out.push({ productId: m.productId, serialNo: m.serialNumber, config });
+    } else if (keys.length) {
+      out.push({ productId: m.productId, serialNo: m.serialNumber, config: keys.map(([code, b]) => keyPayload(code, b)) });
+    }
+  }
+  return out;
+}
+
+export function moduleActions(m: ModuleSetup): Action[] {
+  return Object.values(m.keys ?? {}).flatMap((b) => KEY_EVENTS.flatMap((e) => b[e.key] ?? []));
+}
+
 export interface Problem {
   where: string;
   message: string;
@@ -124,6 +185,14 @@ export function findProblems(doc: Doc, triggerTypes?: string[]): Problem[] {
         for (const a of w.actions ?? []) {
           if (a.type === "PC_CONTROL" && !pcIsComplete(a.pc)) out.push({ where, message: `“${a.summary}” isn't set up yet`, ...at });
         }
+      }
+    }
+  }
+  for (const p of doc.profiles) {
+    for (const m of p.modules ?? []) {
+      const name = doc.modules.find((x) => x.serialNumber === m.serialNumber)?.name ?? "Module";
+      for (const a of moduleActions(m)) {
+        if (a.type === "PC_CONTROL" && !pcIsComplete(a.pc)) out.push({ where: `${p.name} › ${name}`, message: `“${a.summary}” isn't set up yet`, profileId: p.id });
       }
     }
   }
@@ -184,9 +253,17 @@ export async function buildPlan(
         });
       }
     }
+    for (const m of p.modules ?? []) {
+      moduleActions(m).forEach((a) => allowPc(a.pc));
+      // Lets the knob change this computer's volume or brightness (see pc_agent.rs).
+      for (const t of [m.knob?.right, m.knob?.left]) {
+        if (t?.type === "PC_VOLUME") allowed.push({ knob: "pc:volume" });
+        if (t?.type === "PC_BRIGHT") allowed.push({ knob: "pc:bright" });
+      }
+    }
     profiles.push({
       id: p.id, name: p.name, icon: "", iconScale: 60, isDefault: p.isDefault, default: p.isDefault,
-      showName: p.showName, module: [], widget: widgets,
+      showName: p.showName, module: modulesPayload(p), widget: widgets,
     });
   }
 
@@ -205,7 +282,7 @@ export async function buildPlan(
     appConfigs.push({ packageName: "com.ultrabar.weather", config: { apiKey: weather.apiKey.trim(), metric: weather.metric, language: "en" } });
   }
   if (homeAssistant.url.trim() && homeAssistant.token.trim()) {
-    appConfigs.push({ packageName: "com.ultrabar.homeassistant", config: { url: homeAssistant.url.trim(), token: homeAssistant.token.trim() } });
+    appConfigs.push({ packageName: "com.ultrabar.homeassistant", config: { url: haUrl(homeAssistant.url), token: homeAssistant.token.trim() } });
   }
 
   const modules = doc.modulesManaged

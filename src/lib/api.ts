@@ -74,6 +74,41 @@ export interface StorePlugin {
   versionCode?: number | null;
 }
 
+export interface DiscordUser {
+  id: string;
+  username: string;
+  globalName?: string | null;
+}
+
+export interface DiscordStatus {
+  /** Client ID and secret are set. */
+  configured: boolean;
+  clientId: string;
+  signedIn: boolean;
+  /** A live session with the Discord app on this computer. */
+  connected: boolean;
+  user: DiscordUser | null;
+  /** The redirect URL the Discord application needs. */
+  redirectUri: string;
+  /** Set by the UI when the last check failed. */
+  error?: string;
+}
+
+export interface DiscordGuild {
+  id: string;
+  name: string;
+  channels: { id: string; name: string }[];
+}
+
+export interface DiscordSound {
+  guildId: string;
+  guildName: string;
+  soundId: string;
+  name: string;
+  emoji?: string | null;
+  available: boolean;
+}
+
 /** A downloaded shortcut pack. Images are data URLs. */
 export interface Pack {
   name: string;
@@ -116,6 +151,15 @@ export const api = {
   setPcAgentEnabled: (enabled: boolean) => call<void>("set_pc_agent_enabled", { enabled }),
   testPcAction: (payload: unknown) => call<void>("test_pc_action", { payload }),
   publishIcon: (data: string) => call<string>("publish_icon", { data }),
+  /** Whether the bar's Home Assistant app is logged in (its own status page). */
+  haLoggedIn: (port: number) => call<boolean>("ha_logged_in", { port }),
+  discordStatus: () => call<DiscordStatus>("discord_status"),
+  discordSetApp: (clientId: string, clientSecret: string) => call<DiscordStatus>("discord_set_app", { clientId, clientSecret }),
+  discordSignIn: () => call<DiscordStatus>("discord_sign_in"),
+  discordSignOut: () => call<DiscordStatus>("discord_sign_out"),
+  discordCheck: () => call<DiscordStatus>("discord_check"),
+  discordVoiceChannels: () => call<DiscordGuild[]>("discord_voice_channels"),
+  discordSounds: () => call<DiscordSound[]>("discord_sounds"),
   storeApps: () => call<StoreApp[]>("store_apps"),
   storePlugins: () => call<StorePlugin[]>("store_plugins"),
   storePluginPack: (p: StorePlugin) => call<Pack>("store_plugin_pack", { file: p.file, sha256: p.sha256, icon: p.icon ?? null }),
@@ -146,6 +190,10 @@ export const ACT = {
   saveProfiles: 1108,
   actionTree: 1205,
   getDevices: 1300,
+  /** What a Knob can control: a lazy tree like the action tree. */
+  knobTargets: 1617,
+  /** `[serialNumber, …]` → `[{serialNo, online}]`. */
+  moduleState: 30730,
   appConfig: 1010,
   moduleDiscoveryStart: 30100,
   moduleDiscoveryStop: 30101,

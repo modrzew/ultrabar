@@ -42,6 +42,22 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # the updater pulls in flate2's default backend there, Windows doesn't.
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
+# Computer volume and brightness for the Knob module (see `system.rs`).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Media_Audio",
+  "Win32_Media_Audio_Endpoints",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+  "Win32_Devices_Display",
+  "Win32_Graphics_Gdi",
+] }
+
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1

@@ -1,5 +1,13 @@
 import {
   AppWindow,
+  AudioLines,
+  Headphones,
+  HeadphoneOff,
+  MessageCircle,
+  MicOff,
+  PhoneOff,
+  ScreenShare,
+  Video,
   Clock,
   CloudSun,
   Command,
@@ -17,7 +25,7 @@ import {
   Type,
   type LucideIcon,
 } from "lucide-react";
-import type { PcAction, PcControl, Widget, WidgetType } from "./model";
+import type { DiscordOp, PcAction, PcControl, Widget, WidgetType } from "./model";
 import { uid } from "./model";
 import { hotkeyLabel } from "./hid";
 import { zoneCity } from "./timezones";
@@ -39,7 +47,29 @@ export const PC_ACTIONS: Record<PcAction, { label: string; verb: string; icon: L
   openFile: { label: "Open file or folder", verb: "Open", icon: FileText, glyph: "folder", color: "#c98a1b" },
   execCmd: { label: "Run command", verb: "Run", icon: TerminalSquare, glyph: "terminal", color: "#3d3f46" },
   inputText: { label: "Type text", verb: "Type", icon: Type, glyph: "type", color: "#8a4fd8" },
+  discord: { label: "Discord", verb: "Discord", icon: MessageCircle, glyph: "headphones", color: "#5865f2" },
 };
+
+export const DISCORD_OPS: Record<DiscordOp, { label: string; icon: LucideIcon; glyph: string; needs?: "channel" | "sound" }> = {
+  joinVoice: { label: "Join voice channel", icon: Headphones, glyph: "headphones", needs: "channel" },
+  leaveVoice: { label: "Leave voice channel", icon: PhoneOff, glyph: "phone-off" },
+  toggleMute: { label: "Mute / unmute", icon: MicOff, glyph: "mic-off" },
+  toggleDeafen: { label: "Deafen / undeafen", icon: HeadphoneOff, glyph: "headphone-off" },
+  playSound: { label: "Play soundboard sound", icon: AudioLines, glyph: "audio-lines", needs: "sound" },
+  toggleCamera: { label: "Camera on / off", icon: Video, glyph: "video" },
+  toggleScreenShare: { label: "Screen share on / off", icon: ScreenShare, glyph: "screen-share" },
+};
+
+export const DISCORD_ORDER: DiscordOp[] = ["joinVoice", "leaveVoice", "toggleMute", "toggleDeafen", "playSound", "toggleCamera", "toggleScreenShare"];
+
+/** Label, list icon and card symbol for a computer action, Discord ones by operation. */
+export function pcMeta(pc: PcControl | undefined): { label: string; icon: LucideIcon; glyph: string } {
+  if (pc?.action === "discord" && pc.discord) {
+    const d = DISCORD_OPS[pc.discord.op];
+    return { label: d.label, icon: d.icon, glyph: d.glyph };
+  }
+  return PC_ACTIONS[pc?.action ?? "hotkey"];
+}
 
 export interface WidgetDef {
   label: string;
@@ -89,7 +119,8 @@ export function newWidget(type: WidgetType, init: Partial<Widget> = {}): Widget 
       return { ...base, name: init.name ?? "Multi-action", actions: init.actions ?? [] };
     case "PC_CONTROL": {
       const pc: PcControl = init.pc ?? { action: "hotkey", keys: [] };
-      return { ...base, name: init.name ?? PC_ACTIONS[pc.action].label, pc, bgColor: init.bgColor ?? "#24252b" };
+      const bg = pc.action === "discord" ? "#3b3f9e" : "#24252b";
+      return { ...base, name: init.name ?? pcMeta(pc).label, pc, bgColor: init.bgColor ?? bg };
     }
     case "HOT_KEY_GROUP":
       return { ...base, bgColor: init.bgColor ?? "#24252b", group: init.group ?? { buttons: [] } };
@@ -111,6 +142,14 @@ export function pcSummary(pc: PcControl): string {
       return pc.cmd || "No command";
     case "inputText":
       return pc.text ? `“${pc.text}”` : "No text";
+    case "discord": {
+      const d = pc.discord;
+      if (!d) return "Not set up";
+      const need = DISCORD_OPS[d.op].needs;
+      if (need === "channel") return d.label ?? (d.channelId ? "Voice channel" : "No channel chosen");
+      if (need === "sound") return d.label ?? (d.soundId ? "Sound" : "No sound chosen");
+      return DISCORD_OPS[d.op].label;
+    }
   }
 }
 
@@ -123,6 +162,13 @@ export function pcIsComplete(pc: PcControl | undefined): boolean {
     case "startApp": case "openFile": return !!pc.path?.trim();
     case "execCmd": return !!pc.cmd?.trim();
     case "inputText": return !!pc.text;
+    case "discord": {
+      const d = pc.discord;
+      if (!d) return false;
+      if (d.op === "joinVoice") return !!d.channelId;
+      if (d.op === "playSound") return !!d.soundId;
+      return true;
+    }
   }
 }
 
@@ -134,6 +180,20 @@ export function pcPayload(pc: PcControl): unknown {
     case "openFile": return { action: "openFile", params: { path: pc.path ?? "" } };
     case "execCmd": return { action: "execCmd", params: { cmd: pc.cmd ?? "" } };
     case "inputText": return { action: "inputText", params: { text: pc.text ?? "" } };
+    case "discord": {
+      // Short keys: every action has to fit in the bar's 8 KB message.
+      const d = pc.discord;
+      const params: Record<string, string> = { op: d?.op ?? "" };
+      if (d?.op === "joinVoice") {
+        if (d.guildId) params.guild = d.guildId;
+        if (d.channelId) params.channel = d.channelId;
+      }
+      if (d?.op === "playSound") {
+        params.guild = d.guildId ?? "0";
+        if (d.soundId) params.sound = d.soundId;
+      }
+      return { action: "discord", params };
+    }
     case "hotkey": return null;
   }
 }

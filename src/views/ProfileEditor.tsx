@@ -11,6 +11,9 @@ import type { Profile, Widget } from "../lib/model";
 import { CardFace, cardIssue, cardStyle } from "../components/WidgetCard";
 import { Library, type LibItem } from "../components/Library";
 import { Inspector } from "../components/Inspector";
+import { ModuleInspector } from "../components/ModuleInspector";
+import { ModuleSide } from "../components/ModuleRail";
+import { placedModules } from "../lib/modules";
 import { Button, InlineInput, Switch } from "../components/ui";
 
 const SCREEN_W = 1424;
@@ -18,6 +21,7 @@ const SCREEN_W = 1424;
 export function ProfileEditor({ profileId }: { profileId: string }) {
   const profile = useApp((s) => s.doc.profiles.find((p) => p.id === profileId));
   const selected = useApp((s) => s.selected);
+  const selectedModule = useApp((s) => s.selectedModule);
   const online = useApp((s) => s.status.state === "online");
   const deployedHere = useApp((s) => !!s.doc.deployedAt);
   const s = useApp.getState();
@@ -114,7 +118,8 @@ export function ProfileEditor({ profileId }: { profileId: string }) {
         </div>
       </div>
       <aside className="panel">
-        {selected && profile.widgets.some((w) => w.uid === selected) ? <Inspector uid={selected} /> : <Library profileId={profile.id} />}
+        {selectedModule ? <ModuleInspector profileId={profile.id} serial={selectedModule} />
+          : selected && profile.widgets.some((w) => w.uid === selected) ? <Inspector uid={selected} /> : <Library profileId={profile.id} />}
       </aside>
       <DragOverlay dropAnimation={null}>
         {dragItem?.kind === "card" && (
@@ -153,6 +158,9 @@ function BarPreview({ profile, stripRef, scale, selected, dropIndex, libDragging
 }) {
   const { setNodeRef } = useDroppable({ id: "strip" });
   const ids = useMemo(() => profile.widgets.map((w) => w.uid), [profile.widgets]);
+  const doc = useApp((s) => s.doc);
+  const sides = useMemo(() => placedModules(doc), [doc]);
+  const extra = sides.left.length + sides.right.length;
 
   // Keep the selected card in view.
   useEffect(() => {
@@ -161,26 +169,30 @@ function BarPreview({ profile, stripRef, scale, selected, dropIndex, libDragging
   }, [selected, stripRef]);
 
   return (
-    <div className="device" style={{ "--s": scale, maxWidth: 1180 } as CSSProperties}>
-      <div className="screen" ref={setNodeRef}>
-        {profile.widgets.length === 0 ? (
-          <div ref={stripRef} className={`strip-empty${libDragging && dropIndex !== null ? " over" : ""}`}>
-            <div>Drag cards here from the library,<br />or click one to add it.</div>
-          </div>
-        ) : (
-          <div className="strip" ref={stripRef}>
-            <SortableContext items={ids} strategy={horizontalListSortingStrategy}>
-              {profile.widgets.map((w, i) => (
-                <FragmentWithCaret key={w.uid} caret={dropIndex === i}>
-                  <SortableCard w={w} selected={selected === w.uid} />
-                </FragmentWithCaret>
-              ))}
-              {dropIndex === profile.widgets.length && <div className="drop-caret" />}
-            </SortableContext>
-          </div>
-        )}
-        <div className="screen-glare" />
+    <div className="preview-row" style={{ "--s": scale, maxWidth: 1180 + extra * 110 } as CSSProperties}>
+      <ModuleSide side="left" modules={sides.left} profileId={profile.id} />
+      <div className="device" style={{ "--s": scale } as CSSProperties}>
+        <div className="screen" ref={setNodeRef}>
+          {profile.widgets.length === 0 ? (
+            <div ref={stripRef} className={`strip-empty${libDragging && dropIndex !== null ? " over" : ""}`}>
+              <div>Drag cards here from the library,<br />or click one to add it.</div>
+            </div>
+          ) : (
+            <div className="strip" ref={stripRef}>
+              <SortableContext items={ids} strategy={horizontalListSortingStrategy}>
+                {profile.widgets.map((w, i) => (
+                  <FragmentWithCaret key={w.uid} caret={dropIndex === i}>
+                    <SortableCard w={w} selected={selected === w.uid} />
+                  </FragmentWithCaret>
+                ))}
+                {dropIndex === profile.widgets.length && <div className="drop-caret" />}
+              </SortableContext>
+            </div>
+          )}
+          <div className="screen-glare" />
+        </div>
       </div>
+      <ModuleSide side="right" modules={sides.right} profileId={profile.id} />
     </div>
   );
 }
@@ -214,10 +226,11 @@ function SortableCard({ w, selected }: { w: Widget; selected: boolean }) {
 
 function Hint({ profile }: { profile: Profile }) {
   const selected = useApp((s) => s.selected);
+  const hasModules = useApp((s) => s.doc.modules.length > 0);
   const units = profile.widgets.reduce((n, w) => n + (w.type === "TIME" ? 2 : 1), 0);
   return (
     <div className="row faint" style={{ fontSize: 12, justifyContent: "space-between", maxWidth: 1180, gap: 16 }}>
-      <span className="truncate">{selected ? "Drag to reorder · ⌫ to remove" : "Click a card to edit · drag to reorder"}</span>
+      <span className="truncate">{selected ? "Drag to reorder · ⌫ to remove" : `Click a card to edit · drag to reorder${hasModules ? " · click a module to set up its keys" : ""}`}</span>
       {units > 5 && <span className="truncate" title="The bar's screen fits about five cards; swipe on the bar to scroll.">Scrolls on the bar</span>}
     </div>
   );

@@ -313,6 +313,41 @@ input[type="range"].slider::-webkit-slider-thumb { -webkit-appearance: none; wid
 .card .warn-badge { position: absolute; top: calc(14px * var(--s)); right: calc(14px * var(--s)); width: 18px; height: 18px; border-radius: 50%; background: var(--warning); color: #1a1200; display: grid; place-items: center; font-weight: 800; font-size: 12px; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4); }
 .drop-caret { flex: none; width: 3px; align-self: stretch; margin: calc(20px * var(--s)) calc(-11.5px * var(--s)); border-radius: 2px; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
 
+/* Add-on modules beside the bar preview, drawn like small devices. */
+.preview-row { display: flex; align-items: center; gap: 12px; width: 100%; }
+.preview-row > .device { flex: 1; min-width: 0; }
+.mod-side { display: flex; gap: 12px; flex: none; }
+.mod-tile { position: relative; flex: none; width: clamp(56px, 6.5vw, 96px); aspect-ratio: 1; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 20%; }
+.mod-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.mod-tile:hover .mod-body { box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08) inset, 0 16px 32px -12px rgba(0, 0, 0, 0.7), 0 0 0 2px rgba(255, 255, 255, 0.22); }
+.mod-tile.selected .mod-body { box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08) inset, 0 16px 32px -12px rgba(0, 0, 0, 0.7), 0 0 0 2px var(--accent), 0 0 0 5px rgba(91, 103, 248, 0.28); }
+.mod-name { position: absolute; top: calc(100% + 7px); left: -30%; right: -30%; text-align: center; font-size: 11px; color: var(--text-3); }
+.mod-state { position: absolute; top: 7%; right: 7%; width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); box-shadow: 0 0 0 2px #141416; }
+.mod-state.on { background: var(--success); }
+.mod-body {
+  position: relative; width: var(--m); aspect-ratio: 1; border-radius: 20%; display: grid; place-items: center;
+  background: linear-gradient(180deg, #2a2a2e, #1b1b1e 45%, #141416);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08) inset, 0 -1px 0 rgba(0, 0, 0, 0.6) inset, 0 16px 32px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(0, 0, 0, 0.6);
+  transition: box-shadow 0.15s var(--ease);
+}
+.mod-key {
+  position: absolute; border: 0; padding: 0; cursor: inherit;
+  background: linear-gradient(180deg, #3b3b41, #2a2a2f);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.1) inset, 0 2px 5px rgba(0, 0, 0, 0.55);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.mod-key.active { background: linear-gradient(180deg, #7079ff, #4b55dd); }
+.mod-key.click { cursor: pointer; }
+.mod-key.click:hover { box-shadow: 0 1px 0 rgba(255, 255, 255, 0.1) inset, 0 0 0 2px rgba(255, 255, 255, 0.3); }
+.mod-key.selected, .mod-key.selected:hover { box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px rgba(91, 103, 248, 0.35); }
+.mod-knob .mod-key.knob-cap { inset: 15%; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #4c4c54, #25252a 72%); box-shadow: 0 0 0 3px #19191c, 0 0 0 4px rgba(255, 255, 255, 0.07), 0 5px 12px rgba(0, 0, 0, 0.6); }
+.mod-knob .mod-key.knob-cap.active { background: radial-gradient(circle at 35% 30%, #8088ff, #3c45c4 75%); }
+.mod-knob .mod-key.knob-cap.turns { box-shadow: 0 0 0 3px #19191c, 0 0 0 5px rgba(91, 103, 248, 0.75), 0 5px 12px rgba(0, 0, 0, 0.6); }
+.mod-knob .mod-key.knob-cap.selected { box-shadow: 0 0 0 3px #19191c, 0 0 0 5px var(--accent), 0 0 0 9px rgba(91, 103, 248, 0.3); }
+.knob-dot { position: absolute; top: 11%; left: 50%; width: 9%; height: 9%; margin-left: -4.5%; border-radius: 50%; background: rgba(255, 255, 255, 0.85); }
+.mod-figure { display: grid; place-items: center; padding: 10px 0 4px; }
+.key-legend { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; }
+
 .card-label { position: absolute; left: 0; right: 0; bottom: calc(18px * var(--s)); text-align: center; font-size: calc(26px * var(--s)); font-weight: 550; padding: 0 calc(16px * var(--s)); color: rgba(255, 255, 255, 0.85); }
 .card-label.top { top: calc(20px * var(--s)); bottom: auto; text-align: left; padding: 0 calc(30px * var(--s)); }
 .card-center { position: absolute; inset: 0; display: grid; place-items: center; }

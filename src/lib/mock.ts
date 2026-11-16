@@ -67,6 +67,20 @@ const tree: Record<string, unknown[]> = {
   scene: [],
 };
 
+// Knob targets (act 1617), as firmware 1.0.9 lists them.
+const knobTree: Record<string, unknown[]> = {
+  "": [
+    { id: "air", last: false, name: "Air Conditioner" }, { id: "audio_player", last: false, name: "AudioPlayer" },
+    { id: "pc:root", last: false, name: "Computer" }, { id: "local:root", last: false, name: "Corebar" },
+    { id: "curtain", last: false, name: "Curtain" }, { id: "fan", last: false, name: "Fan" }, { id: "light", last: false, name: "Light" },
+  ],
+  "pc:root": [{ id: "pc:volume", last: true, name: "Volume", type: "PC_VOLUME" }, { id: "pc:bright", last: true, name: "Brightness", type: "PC_BRIGHT" }],
+  "local:root": [{ id: "local:volume", last: true, name: "Corebar Volume", type: "LOCAL_VOLUME" }, { id: "local:bright", last: true, name: "Corebar Brightness", type: "LOCAL_BRIGHT" }],
+  light: [{ id: "light.desk", last: true, name: "Desk lamp", type: "LIGHT_TEMP" }],
+};
+
+let discord = { configured: false, clientId: "", signedIn: false, connected: false, user: null as null | { id: string; username: string }, redirectUri: "http://localhost" };
+
 const triggers = {
   triggers: [
     { type: "DEVICE_STATE", name: "设备状态", params: [
@@ -139,6 +153,8 @@ async function request(act: number, data: unknown): Promise<unknown> {
     case 1000: return apps;
     case 1002: case 1300: case 30701: case 30720: return [];
     case 1205: return tree[(data as string) ?? ""] ?? [];
+    case 1617: return knobTree[(data as string) ?? ""] ?? [];
+    case 30730: return (data as string[]).map((serialNo) => ({ serialNo, online: serialNo === "DK01A2234" }));
     case 30700: return triggers;
     case 30710: return [{ label: "Default Profile", value: "profile_2", last: true }];
     case 30721: return [{ label: "前台", value: "true", last: true }, { label: "后台", value: "false", last: true }];
@@ -153,7 +169,8 @@ async function request(act: number, data: unknown): Promise<unknown> {
     // Removed in firmware 1.0.9; the real bar replies with an unmatched error.
     case 1101: case 30501: throw { code: -5, message: `The bar doesn't support this request (act ${act}). Its firmware may be newer or older than this app expects.` };
     case 30100:
-      setTimeout(() => emit("bar-push", { act: 30102, code: 200, data: { uid: "4097", productId: "DOT_KEY", serialNumber: "DK01A2234", name: "Dot Key", netId: 3, workMode: 0 } }), 1800);
+      setTimeout(() => emit("bar-push", { act: 30102, code: 200, data: { interfaceType: "can", serialNumber: "DK01A2234", workMode: 1, productId: 268435457, netId: 32 } }), 1800);
+      setTimeout(() => emit("bar-push", { act: 30102, code: 200, data: { interfaceType: "can", serialNumber: "KN01B7781", workMode: 1, productId: 268435458, netId: 122 } }), 2600);
       return null;
     default: return null;
   }
@@ -188,6 +205,17 @@ export async function invoke(cmd: string, args: Record<string, unknown> = {}): P
     case "store_plugins": await sleep(400); return storePlugins;
     case "store_plugin_pack": await sleep(600); return packs[args.file as string];
     case "set_allowed_actions": case "set_pc_agent_enabled": case "test_pc_action": case "refresh_bar_screen": return;
+    case "ha_logged_in": return false;
+    case "discord_status": return discord;
+    case "discord_set_app": discord = { ...discord, clientId: String(args.clientId), configured: !!args.clientId && (!!args.clientSecret || discord.configured) }; return discord;
+    case "discord_sign_in": await sleep(1500); discord = { ...discord, signedIn: true, connected: true, user: { id: "1", username: "you" } }; return discord;
+    case "discord_sign_out": discord = { ...discord, signedIn: false, connected: false, user: null }; return discord;
+    case "discord_check": if (!discord.configured) throw new Error("Discord isn't set up."); return discord;
+    case "discord_voice_channels": await sleep(400); return [{ id: "10", name: "Friends", channels: [{ id: "11", name: "General" }, { id: "12", name: "Gaming" }] }];
+    case "discord_sounds": await sleep(400); return [
+      { guildId: "0", guildName: "", soundId: "1", name: "quack", emoji: "🦆", available: true },
+      { guildId: "10", guildName: "Friends", soundId: "7", name: "airhorn", emoji: "📯", available: true },
+    ];
     default: throw new Error(`mock: unknown command ${cmd}`);
   }
 }

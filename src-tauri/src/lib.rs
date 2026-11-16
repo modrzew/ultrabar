@@ -1,4 +1,5 @@
 mod connection;
+mod discord;
 mod discovery;
 mod icons;
 mod market;
@@ -6,6 +7,7 @@ mod pc_agent;
 mod protocol;
 mod screen;
 mod store;
+mod system;
 mod tls;
 
 use std::net::Ipv4Addr;
@@ -26,6 +28,7 @@ pub struct AppState {
     pub status: Mutex<Status>,
     conn: Mutex<Option<ConnHandle>>,
     icons: Arc<icons::IconServer>,
+    pub discord: discord::Discord,
 }
 
 impl AppState {
@@ -214,6 +217,73 @@ async fn test_pc_action(app: AppHandle, payload: Value) -> Result<(), String> {
     pc_agent::execute(&app, &payload).await
 }
 
+/// The bar's Home Assistant app reports on its own web page whether it's
+/// logged in to Home Assistant (no session token needed for this one).
+#[tauri::command]
+async fn ha_logged_in(state: State<'_, AppState>, port: u16) -> Result<bool, String> {
+    let ip = state
+        .status
+        .lock()
+        .unwrap()
+        .bar
+        .as_ref()
+        .map(|b| b.ip.clone())
+        .ok_or("No bar selected")?;
+    let body: Value = market::client()
+        .get(format!("http://{ip}:{port}/status"))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(body.get("data").and_then(|d| d.as_bool()).unwrap_or(false))
+}
+
+#[tauri::command]
+async fn discord_status(state: State<'_, AppState>) -> Result<discord::Status, String> {
+    Ok(state.discord.status().await)
+}
+
+#[tauri::command]
+async fn discord_set_app(
+    state: State<'_, AppState>,
+    client_id: String,
+    client_secret: String,
+) -> Result<discord::Status, String> {
+    state.discord.set_app(client_id, client_secret).await;
+    Ok(state.discord.status().await)
+}
+
+/// Discord shows an "Authorize" prompt; this waits for the user to answer.
+#[tauri::command]
+async fn discord_sign_in(state: State<'_, AppState>) -> Result<discord::Status, String> {
+    state.discord.sign_in().await
+}
+
+#[tauri::command]
+async fn discord_sign_out(state: State<'_, AppState>) -> Result<discord::Status, String> {
+    state.discord.sign_out().await;
+    Ok(state.discord.status().await)
+}
+
+/// Connect to the Discord app if needed and report whether it works.
+#[tauri::command]
+async fn discord_check(state: State<'_, AppState>) -> Result<discord::Status, String> {
+    state.discord.check().await
+}
+
+#[tauri::command]
+async fn discord_voice_channels(state: State<'_, AppState>) -> Result<Vec<discord::Guild>, String> {
+    state.discord.voice_channels().await
+}
+
+#[tauri::command]
+async fn discord_sounds(state: State<'_, AppState>) -> Result<Vec<discord::Sound>, String> {
+    state.discord.sounds().await
+}
+
 /// Store a PNG icon and return the URL the bar should load it from.
 #[tauri::command]
 fn publish_icon(state: State<'_, AppState>, data: String) -> Result<String, String> {
@@ -287,6 +357,7 @@ pub fn run() {
                 status: Mutex::new(Status::idle()),
                 conn: Mutex::new(None),
                 icons,
+                discord: discord::Discord::new(dir.clone()),
             });
 
             // Reconnect to the last bar on launch.
@@ -318,6 +389,14 @@ pub fn run() {
             set_allowed_actions,
             set_pc_agent_enabled,
             test_pc_action,
+            ha_logged_in,
+            discord_status,
+            discord_set_app,
+            discord_sign_in,
+            discord_sign_out,
+            discord_check,
+            discord_voice_channels,
+            discord_sounds,
             publish_icon,
             write_json_file,
             read_json_file,

@@ -74,7 +74,7 @@ function useGlobalShortcuts() {
       } else if (mod && e.key.toLowerCase() === "d" && s.selected) {
         e.preventDefault();
         s.duplicateWidget(s.selected);
-      } else if (e.key === "Escape" && s.selected) {
+      } else if (e.key === "Escape" && (s.selected || s.selectedModule)) {
         s.select(null);
       }
     };
