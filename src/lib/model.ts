@@ -125,6 +125,8 @@ export interface Profile {
   name: string;
   isDefault: boolean;
   showName: boolean;
+  /** PNG data URL (see `profileImagePng`) shown in the bar's profile switcher. */
+  image?: string;
   widgets: Widget[];
   modules?: ModuleSetup[];
 }
