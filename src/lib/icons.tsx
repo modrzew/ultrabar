@@ -62,6 +62,33 @@ export async function imageFilePng(file: File): Promise<string> {
   }
 }
 
+/** Profile picture size. The bar's profile switcher shows the current
+ * profile's picture at 220×200 (1 dp = 1 px on the bar) and the others as
+ * 140×140 thumbnails, center-cropped. */
+export const PROFILE_IMAGE = { w: 220, h: 200 };
+
+/** Read an image file, center-cropped to the profile picture size. */
+export async function profileImagePng(file: File): Promise<string> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await loadImage(url);
+    const { w: W, h: H } = PROFILE_IMAGE;
+    const iw = img.naturalWidth, ih = img.naturalHeight;
+    if (!iw || !ih) throw new Error("empty image");
+    const k = Math.max(W / iw, H / ih);
+    const sw = W / k, sh = H / k;
+    const c = document.createElement("canvas");
+    c.width = W;
+    c.height = H;
+    const ctx = c.getContext("2d")!;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, (iw - sw) / 2, (ih - sh) / 2, sw, sh, 0, 0, W, H);
+    return c.toDataURL("image/png");
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 /** Any image URL (e.g. a data URL from a shortcut pack) as a PNG that fits
  * in `max` px; the bar's icon server only takes PNGs. */
 export async function imageUrlPng(src: string, max = 160): Promise<string> {

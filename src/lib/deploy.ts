@@ -219,7 +219,7 @@ export interface Plan {
 
 /** `iconUrl` serves a card's icon; `cardArtUrl` the full card face of
  * computer-action, multi-action and shortcut-group cards (see `hasCardArt`);
- * `pngUrl` any other image (shortcut-group buttons). */
+ * `pngUrl` any other image (shortcut-group buttons, profile pictures). */
 export async function buildPlan(
   doc: Doc,
   iconUrl: (w: Widget) => Promise<string | undefined>,
@@ -261,8 +261,9 @@ export async function buildPlan(
         if (t?.type === "PC_BRIGHT") allowed.push({ knob: "pc:bright" });
       }
     }
+    // The bar shows the profile's icon in its profile switcher, center-cropped.
     profiles.push({
-      id: p.id, name: p.name, icon: "", iconScale: 60, isDefault: p.isDefault, default: p.isDefault,
+      id: p.id, name: p.name, icon: p.image ? await pngUrl(p.image) : "", iconScale: 60, isDefault: p.isDefault, default: p.isDefault,
       showName: p.showName, module: modulesPayload(p), widget: widgets,
     });
   }

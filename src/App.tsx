@@ -220,7 +220,7 @@ function Sidebar() {
         </div>
         {doc.profiles.map((p) => (
           <ProfileItem
-            key={p.id} id={p.id} name={p.name} count={p.widgets.length} isDefault={p.isDefault}
+            key={p.id} id={p.id} name={p.name} image={p.image} count={p.widgets.length} isDefault={p.isDefault}
             active={view.kind === "profile" && view.id === p.id}
             renaming={renaming === p.id}
             onRename={(r) => setRenaming(r ? p.id : null)}
@@ -264,8 +264,8 @@ function UpdateNotice() {
   );
 }
 
-function ProfileItem({ id, name, count, isDefault, active, renaming, onRename }: {
-  id: string; name: string; count: number; isDefault: boolean; active: boolean; renaming: boolean; onRename: (on: boolean) => void;
+function ProfileItem({ id, name, image, count, isDefault, active, renaming, onRename }: {
+  id: string; name: string; image?: string; count: number; isDefault: boolean; active: boolean; renaming: boolean; onRename: (on: boolean) => void;
 }) {
   const s = useApp.getState();
   const menu = useMenu();
@@ -279,7 +279,7 @@ function ProfileItem({ id, name, count, isDefault, active, renaming, onRename }:
       onDoubleClick={() => onRename(true)}
       onKeyDown={(e) => e.key === "Enter" && s.setView({ kind: "profile", id })}
     >
-      <LayoutGrid size={15} />
+      {image ? <img className="side-thumb" src={image} alt="" /> : <LayoutGrid size={15} />}
       {renaming ? (
         <InlineInput
           value={name} autoFocus
