@@ -22,6 +22,8 @@ export type WidgetType =
 export type IconSpec =
   | { kind: "glyph"; glyph: string; color: string; png: string }
   | { kind: "image"; png: string }
+  /** From the vendor's cloud icon library; `png` is the downloaded icon. */
+  | { kind: "library"; id: number; name: string; png: string }
   | { kind: "url"; url: string };
 
 export type PcAction = "hotkey" | "openBrowser" | "startApp" | "openFile" | "execCmd" | "inputText" | "discord";

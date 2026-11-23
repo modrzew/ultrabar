@@ -4,6 +4,7 @@ import { findWidget, useApp } from "../lib/store";
 import type { Widget } from "../lib/model";
 import { SOUNDSCAPES, SYSTEM_CARDS, WIDGETS, pcMeta } from "../lib/widgets";
 import { firmwareBefore } from "../lib/api";
+import { isHaScene } from "../lib/deploy";
 import { isMac } from "../lib/hid";
 import { allZones, timeIn, zoneCity, zoneOffset, zoneRegion } from "../lib/timezones";
 import { Button, Field, Spinner } from "./ui";
@@ -175,6 +176,23 @@ function Body({ w, set }: { w: Widget; set: Setter }) {
       );
     }
     case "DEVICE":
+      if (isHaScene(w)) {
+        return (
+          <div className="stack" style={{ gap: 0 }}>
+            <div className="panel-section">
+              <NameField w={w} set={set} />
+              <Note>Runs this Home Assistant scene when you tap the card.</Note>
+            </div>
+            <div className="panel-section">
+              <h4>Appearance</h4>
+              <IconEditor w={w} set={set} />
+              {w.icon && (
+                <div><Button size="sm" variant="ghost" onClick={() => set((x) => { delete x.icon; })}>Remove the icon</Button></div>
+              )}
+            </div>
+          </div>
+        );
+      }
       return (
         <div className="stack">
           <NameField w={w} set={set} />
@@ -318,12 +336,16 @@ function WeatherEditor({ w, set }: { w: Widget; set: Setter }) {
           <div>Weather needs an AccuWeather API key. <button className="link" onClick={() => useApp.getState().setView({ kind: "integrations" })}>Add it in Integrations</button></div>
         </div>
       )}
-      <Field label="Location" error={error}>
-        {w.weather?.place && (
+      <Field label="Location" error={error} hint={!lat.trim() && !lon.trim() ? "None set, so the bar uses its network location." : undefined}>
+        {(w.weather?.place || (lat.trim() && lon.trim())) && (
           <div className="group" style={{ marginBottom: 6 }}>
             <div className="group-row" style={{ minHeight: 44 }}>
               <MapPin size={14} className="faint" />
-              <div className="txt"><b>{w.weather.place}</b><span>{Number(lat).toFixed(3)}, {Number(lon).toFixed(3)}</span></div>
+              <div className="txt">
+                <b>{w.weather?.place ?? "Coordinates"}</b>
+                <span>{Number(lat).toFixed(3)}, {Number(lon).toFixed(3)}</span>
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => set((x) => { x.weather = { lat: "", lon: "" }; })} title="Use the bar's network location instead">Clear</Button>
             </div>
           </div>
         )}

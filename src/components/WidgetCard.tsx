@@ -1,9 +1,9 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { ArrowDown, ArrowUp, CloudSun, Layers, LayoutGrid, Lightbulb, Settings2 } from "lucide-react";
+import { ArrowDown, ArrowUp, CloudSun, Layers, LayoutGrid, Lightbulb, Settings2, Sparkles } from "lucide-react";
 import type { Widget } from "../lib/model";
 import { SOUNDSCAPES, WIDGETS, formatDuration, isSystemCard, pcIsComplete, pcMeta } from "../lib/widgets";
 import { timeIn, zoneCity } from "../lib/timezones";
-import { barAppIconUrl, needsNewerFirmware, type DeployContext } from "../lib/deploy";
+import { barAppIconUrl, halfLocation, isHaScene, needsNewerFirmware, type DeployContext } from "../lib/deploy";
 import { useApp } from "../lib/store";
 
 export function useNow(ms = 10_000) {
@@ -22,7 +22,7 @@ export function cardIssue(w: Widget, ctx: DeployContext = {}): string | null {
   if (w.type === "PC_CONTROL" && !pcIsComplete(w.pc)) return "Action isn't set up yet";
   if (w.type === "SCENE" && !w.actions?.length) return "Add at least one action";
   if (w.type === "HOT_KEY_GROUP" && !w.group?.buttons.length) return "Has no buttons";
-  if (w.type === "WEATHER" && (!w.weather?.lat || !w.weather?.lon)) return "Choose a location";
+  if (halfLocation(w)) return "Fill in both coordinates, or neither";
   return null;
 }
 
@@ -46,6 +46,7 @@ export function CardFace({ w }: { w: Widget }) {
         </div>
       );
     case "DEVICE":
+      if (isHaScene(w) && w.icon) return <IconFace w={w} />;
       return (
         <div className="card-center" style={{ background: "#1d1d20" }}>
           <Lightbulb size="34%" strokeWidth={1.5} color="#ffd27a" />
@@ -189,7 +190,7 @@ function AppFace({ w }: { w: Widget }) {
 }
 
 function IconFace({ w }: { w: Widget }) {
-  const Fallback = w.type === "SCENE" ? Layers : w.type === "HOT_KEY_GROUP" ? LayoutGrid : pcMeta(w.pc).icon;
+  const Fallback = w.type === "SCENE" ? Layers : w.type === "HOT_KEY_GROUP" ? LayoutGrid : w.type === "DEVICE" ? Sparkles : pcMeta(w.pc).icon;
   const src = w.icon ? (w.icon.kind === "url" ? w.icon.url : w.icon.png) : null;
   const size = `${Math.max(10, Math.min(100, w.iconScale))}%`;
   return (

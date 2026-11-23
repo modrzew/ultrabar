@@ -130,13 +130,25 @@ where
     Ok(out)
 }
 
-pub async fn apps() -> Result<Vec<StoreApp>, String> {
+/// Search text for the store's `keyword` parameter; None when blank.
+fn keyword(k: Option<&str>) -> Option<&str> {
+    k.map(str::trim).filter(|k| !k.is_empty())
+}
+
+/// Store apps, optionally only those matching `search` (the vendor's search,
+/// as the official app sends it: `keyword` in the request body).
+pub async fn apps(search: Option<&str>) -> Result<Vec<StoreApp>, String> {
     let url = format!("{API}apps/{APP_TYPE}/fetchListV2");
+    let search = keyword(search);
     all_pages(|pi| {
+        let mut body = json!({ "pi": pi, "ps": PAGE_SIZE });
+        if let Some(k) = search {
+            body["keyword"] = k.into();
+        }
         let req = client()
             .post(&url)
             .header("Accept-Language", "en")
-            .json(&json!({ "pi": pi, "ps": PAGE_SIZE }));
+            .json(&body);
         async move {
             let r = req
                 .send()
@@ -150,12 +162,19 @@ pub async fn apps() -> Result<Vec<StoreApp>, String> {
     .await
 }
 
-pub async fn plugins() -> Result<Vec<StorePlugin>, String> {
-    let url = format!("{API}plugin/page");
+/// Shortcut packs, optionally only those matching `search` (`keyword` in the
+/// query string, as for the other paged GET lists).
+pub async fn plugins(search: Option<&str>) -> Result<Vec<StorePlugin>, String> {
+    let mut url = reqwest::Url::parse(&format!("{API}plugin/page")).expect("valid URL");
+    if let Some(k) = keyword(search) {
+        url.query_pairs_mut().append_pair("keyword", k);
+    }
     let list: Vec<StorePlugin> = all_pages(|pi| {
-        let req = client()
-            .get(format!("{url}?pi={pi}&ps={PAGE_SIZE}"))
-            .header("Accept-Language", "en");
+        let mut u = url.clone();
+        u.query_pairs_mut()
+            .append_pair("pi", &pi.to_string())
+            .append_pair("ps", &PAGE_SIZE.to_string());
+        let req = client().get(u).header("Accept-Language", "en");
         async move {
             let r = req
                 .send()
@@ -168,6 +187,46 @@ pub async fn plugins() -> Result<Vec<StorePlugin>, String> {
     })
     .await?;
     Ok(list.into_iter().filter(|p| p.plugin_type == 0).collect())
+}
+
+/// Package names go into the URL path, so only allow what Android allows.
+fn valid_package(p: &str) -> bool {
+    !p.is_empty()
+        && p.len() <= 255
+        && p.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'_')
+}
+
+/// The latest store version of one app (`fetchLastVerV3`), or None when the
+/// store doesn't have it. V3 wraps V2's record in the usual
+/// `{state, msg, data}`; an unknown package comes back without `data`.
+pub async fn latest_app(package: &str) -> Result<Option<StoreApp>, String> {
+    if !valid_package(package) {
+        return Err(format!("Invalid package name: {package}"));
+    }
+    let body: Value = client()
+        .post(format!("{API}apps/{APP_TYPE}/{package}/fetchLastVerV3"))
+        .header("Accept-Language", "en")
+        .json(&json!({}))
+        .send()
+        .await
+        .map_err(net_err)?
+        .error_for_status()
+        .map_err(net_err)?
+        .json()
+        .await
+        .map_err(net_err)?;
+    latest_record(&body)
+}
+
+fn latest_record(body: &Value) -> Result<Option<StoreApp>, String> {
+    if body.get("state").and_then(Value::as_i64) != Some(200) {
+        let msg = body.get("msg").and_then(Value::as_str).unwrap_or("no data");
+        return Err(format!("The store returned an unexpected answer ({msg})."));
+    }
+    Ok(body
+        .get("data")
+        .filter(|d| d.is_object())
+        .and_then(|d| serde_json::from_value(d.clone()).ok()))
 }
 
 async fn get_bytes(url: &str, max: usize) -> Result<Vec<u8>, String> {
@@ -378,6 +437,165 @@ pub async fn pack(file: &str, sha256: &str, fallback_icon: Option<&str>) -> Resu
     })
 }
 
+/// The vendor's cloud icon library (no login), as the official app's picker
+/// uses it: 50 icons a page, `group=false`, and `projectId` 20 (its "Icon"
+/// tab; 30 is the "Background" tab). Every parameter is always sent, empty
+/// when unused.
+const ICON_PAGE_SIZE: u32 = 50;
+const ICON_PROJECT: u32 = 20;
+/// Library icons are 256 px PNGs of a few KB.
+const MAX_ICON: usize = 2 << 20;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IconTag {
+    pub id: i64,
+    pub tag: String,
+}
+
+/// The library's filters: group, category and style.
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct IconTags {
+    pub group: Vec<IconTag>,
+    pub category: Vec<IconTag>,
+    pub icon_style: Vec<IconTag>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryIcon {
+    pub id: i64,
+    #[serde(default)]
+    pub name: String,
+    /// An http(s) PNG on the vendor's CDN.
+    pub path: String,
+    #[serde(default)]
+    pub icon_style_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub struct IconPage {
+    pub total: u64,
+    pub icons: Vec<LibraryIcon>,
+}
+
+/// One page of the library. Unset filters mean "All".
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IconQuery {
+    pub page: u32,
+    #[serde(default)]
+    pub keyword: Option<String>,
+    #[serde(default)]
+    pub group_id: Option<i64>,
+    #[serde(default)]
+    pub category_id: Option<i64>,
+    #[serde(default)]
+    pub icon_style_id: Option<i64>,
+}
+
+fn library_err(e: reqwest::Error) -> String {
+    if e.is_timeout() {
+        "The icon library didn't answer in time.".into()
+    } else if e.is_connect() {
+        "Couldn't reach the icon library. Check your internet connection.".into()
+    } else if let Some(s) = e.status() {
+        format!("The icon library answered with an error (HTTP {}).", s.as_u16())
+    } else {
+        format!("Couldn't load the icon library: {e}")
+    }
+}
+
+async fn library_get(url: reqwest::Url) -> Result<Value, String> {
+    client()
+        .get(url)
+        .header("Accept-Language", "en-US")
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(library_err)?
+        .error_for_status()
+        .map_err(library_err)?
+        .json()
+        .await
+        .map_err(library_err)
+}
+
+/// The library's `data`, which needs `state` 200 as in the official app.
+fn library_data(body: &Value) -> Result<&Value, String> {
+    match body.get("data") {
+        Some(d) if body.get("state").and_then(Value::as_i64) == Some(200) && d.is_object() => Ok(d),
+        _ => {
+            let msg = body.get("msg").and_then(Value::as_str).unwrap_or("no data");
+            Err(format!("The icon library returned an unexpected answer ({msg})."))
+        }
+    }
+}
+
+fn parse_tags(body: &Value) -> Result<IconTags, String> {
+    let data = library_data(body)?;
+    let list = |k: &str| -> Vec<IconTag> {
+        data.get(k)
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|t| serde_json::from_value(t.clone()).ok()).collect())
+            .unwrap_or_default()
+    };
+    Ok(IconTags {
+        group: list("group"),
+        category: list("category"),
+        icon_style: list("iconStyle"),
+    })
+}
+
+pub async fn icon_tags() -> Result<IconTags, String> {
+    let url = reqwest::Url::parse(&format!("{API}icon/tags/locales/allGrouped")).expect("valid URL");
+    parse_tags(&library_get(url).await?)
+}
+
+fn icon_page_url(q: &IconQuery) -> reqwest::Url {
+    let id = |v: Option<i64>| v.filter(|&i| i > 0).map(|i| i.to_string()).unwrap_or_default();
+    let mut url = reqwest::Url::parse(&format!("{API}icon/v2/page")).expect("valid URL");
+    url.query_pairs_mut()
+        .append_pair("pi", &q.page.max(1).to_string())
+        .append_pair("ps", &ICON_PAGE_SIZE.to_string())
+        .append_pair("keyword", keyword(q.keyword.as_deref()).unwrap_or(""))
+        .append_pair("group", "false")
+        .append_pair("projectId", &ICON_PROJECT.to_string())
+        .append_pair("groupId", &id(q.group_id))
+        .append_pair("categoryId", &id(q.category_id))
+        .append_pair("iconStyleId", &id(q.icon_style_id));
+    url
+}
+
+fn parse_icon_page(body: &Value) -> Result<IconPage, String> {
+    let data = library_data(body)?;
+    let icons = data
+        .get("records")
+        .and_then(Value::as_array)
+        .map(|r| {
+            r.iter()
+                .filter_map(|v| serde_json::from_value::<LibraryIcon>(v.clone()).ok())
+                .filter(|i| i.path.starts_with("https://") || i.path.starts_with("http://"))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(IconPage {
+        total: data.get("total").and_then(Value::as_u64).unwrap_or(0),
+        icons,
+    })
+}
+
+pub async fn icon_page(q: &IconQuery) -> Result<IconPage, String> {
+    parse_icon_page(&library_get(icon_page_url(q)).await?)
+}
+
+/// Downloads a picked icon as a data URL. Card art is drawn on a canvas, and
+/// an image from another origin would make that canvas unreadable.
+pub async fn icon_image(url: &str) -> Result<String, String> {
+    let bytes = get_bytes(url, MAX_ICON).await?;
+    data_url(&bytes).ok_or_else(|| "That icon isn't an image this app can use.".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,5 +677,71 @@ mod tests {
         assert!(open_pack(bytes.clone(), "").is_err());
         let no_config = zip_of(&[("readme.txt", b"hi")]);
         assert!(open_pack(no_config.clone(), &sha(&no_config)).is_err());
+    }
+
+    #[test]
+    fn reads_the_latest_version_of_one_app() {
+        // `fetchLastVerV3` wraps V2's record; an unknown package has no `data`.
+        let body = json!({"state": 200, "msg": "ok", "data": {"appName": "Whitenoise",
+            "application": "com.ultrabar.whitenoise", "versionCode": 5, "versionName": "1.0.5"}});
+        let app = latest_record(&body).unwrap().unwrap();
+        assert_eq!((app.application.as_str(), app.version_code), ("com.ultrabar.whitenoise", Some(5)));
+        assert_eq!(latest_record(&json!({"state": 200, "msg": "ok"})).unwrap(), None);
+        assert!(latest_record(&json!({"state": -1, "msg": "nope"})).is_err());
+    }
+
+    #[test]
+    fn only_puts_package_names_into_store_urls() {
+        assert!(valid_package("com.ultrabar.whitenoise"));
+        assert!(valid_package("a_b.c1"));
+        assert!(!valid_package(""));
+        assert!(!valid_package("../plugin/page"));
+        assert!(!valid_package("com.x/fetchListV2?"));
+        assert_eq!(keyword(Some("  ")), None);
+        assert_eq!(keyword(Some(" zoom ")), Some("zoom"));
+    }
+
+    #[test]
+    fn asks_for_library_pages_like_the_official_picker() {
+        let url = icon_page_url(&IconQuery {
+            page: 0,
+            keyword: Some(" play ".into()),
+            category_id: Some(1534),
+            icon_style_id: Some(0),
+            ..Default::default()
+        });
+        let q: HashMap<String, String> = url.query_pairs().into_owned().collect();
+        assert_eq!(q.len(), 8);
+        assert_eq!(q["pi"], "1");
+        assert_eq!(q["ps"], "50");
+        assert_eq!(q["keyword"], "play");
+        assert_eq!(q["group"], "false");
+        assert_eq!(q["projectId"], "20");
+        assert_eq!(q["categoryId"], "1534");
+        assert_eq!(q["groupId"], "");
+        assert_eq!(q["iconStyleId"], "");
+    }
+
+    #[test]
+    fn reads_library_tags_and_pages() {
+        let tags = parse_tags(&json!({"state": 200, "data": {
+            "group": [{"id": 1516, "tag": "Function"}, {"tag": "no id"}],
+            "category": [{"id": 1534, "tag": "Apps · Color"}],
+            "iconStyle": [{"id": 1519, "tag": "Monochrome"}]
+        }}))
+        .unwrap();
+        assert_eq!(tags.group, vec![IconTag { id: 1516, tag: "Function".into() }]);
+        assert_eq!(tags.icon_style[0].tag, "Monochrome");
+        assert!(parse_tags(&json!({"state": 500, "msg": "x"})).is_err());
+
+        let page = parse_icon_page(&json!({"state": 200, "data": {"current": 1, "total": 39800, "records": [
+            {"id": 40235, "name": "zoom", "path": "https://sslcdn.lifex360.com/icon/a.png", "iconStyleName": "mono"},
+            {"id": 1, "name": "local", "path": "file://x.png"},
+            {"id": 2, "name": "no path"}
+        ]}}))
+        .unwrap();
+        assert_eq!(page.total, 39800);
+        assert_eq!(page.icons.len(), 1);
+        assert_eq!(page.icons[0].icon_style_name.as_deref(), Some("mono"));
     }
 }

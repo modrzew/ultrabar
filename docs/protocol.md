@@ -235,7 +235,7 @@ If `config` is true, the official app shows a "Web UI" button that opens `http:/
 
 ## 9. HTTP endpoints (port 8080) **[C]**
 
-- `POST http://<ip>:8080/upload/zip`: `multipart/form-data`, one part `name="file"; filename="core_bar_assets.zip"`, `Content-Type: application/octet-stream`. The zip contains `image/<id>.png`. The reply is JSON `{"state": <int>, "msg": "…"}`. The exact success value of `state` isn't known yet **[I]**. Whether the zip includes a top-level `CoreBarAssets/` folder depends on a pack-mode flag I haven't decoded **[I]**.
+- `POST http://<ip>:8080/upload/zip`: `multipart/form-data`, one part `name="file"; filename="core_bar_assets.zip"`, `Content-Type: application/octet-stream`. The reply is JSON `{"state": <int>, "msg": "…"}`, and the official app checks `state == 200`. Its zip holds `image/<name>.png` at the root (pack mode 1, no `CoreBarAssets/` folder). Launcher 1.0.9 takes `subDir` and `isFull` too; see "Card images on the bar" below.
 - `POST http://<ip>:8080/upload?serialNo=<module SN>`: same multipart format, file `config.tgz`. Used for VivoCube module screen layouts.
 - No auth on these is visible in the client code. Don't expose them beyond your LAN.
 
@@ -247,7 +247,7 @@ The app also calls `https://gatewayssl.dev.aiks360.com/api/v1/base-service/pub/.
 
 1. ~~Discovery reply format~~ confirmed (section 2). The command port was 7431 on this bar, but it may change, so always take it from discovery.
 2. Reply payloads for `1000`, `1002`, `1205`, `30700`. These read-only queries would answer most of the [I] items above.
-3. `state` success value from `/upload/zip`. Is the zip uploaded **before** or **after** `1108` taking effect? (The app uploads last.)
+3. ~~`state` success value from `/upload/zip`~~ 200 (see "Card images on the bar"). The official app uploads last, after `30500`; this app uploads first.
 4. Whether a minimal `1108` (one profile with a `TIME` widget) is accepted without the earlier `30300` step.
 
 ---
@@ -597,7 +597,15 @@ Read from the official app's macOS build (x86_64 slice, symbols intact), and che
   - The app picks a free `netId` itself ("Module exceeds count limit" when none is left), then sends `30300` **right away**, not on the next project deploy.
   - Mesh devices are paired one by one with `30103 {sn, address}`. The result arrives per serial as `{serialNumber, errorCode}`. Error texts: gateway busy, network configuration timeout/failed, AppKey configuration timeout/failed, pairing timeout.
 - **Replace** scans the same way and swaps in the new module's `sn`/`netId` (pairing first for mesh). It keeps the old module's name and per-profile config, then sends `30300`.
-- **Details** shows Name (with rename), ProductId, Device ID, Net ID, and "App Ver" read with `30200` (property 5 **[I]**). It also has the OTA button (out of scope here).
+- **Details** (`ModuleDetailsDialog`) shows:
+  - Name, with rename.
+  - ProductId as the product's name (`DOT_KEY` … `PC_BOOT`; empty for unknown ids).
+  - Device ID, which is the module's serial number.
+  - Net ID in decimal.
+  - "App Ver", read when the dialog opens with `30200` `{serialNo: <sn>, deviceId: 0, propertyId: 5, extra: null}`. The reply needs code 200, and its `data.result` is shown as a string as is.
+  - The OTA button (out of scope here).
+- `30200` in general is `CoreBarApi::readProperty(serialNo, deviceId, propertyId, extra)`. An empty `extra` goes out as JSON `null`, and the reply value is `data.result`. The VivoCube reads use the same call: Wi-Fi config is `deviceId 256, propertyId 7` (`result` is a hex string), and Wi-Fi state is `deviceId 256, propertyId 6` (`result` is an int).
+- What a module actually returns for property 5 hasn't been seen yet; the official app only requires a JSON string.
 
 ## Gesture prompt (Dot Key, Knob press, VivoCube buttons, Sense Cube taps) **[C]**
 Every gesture editor has a "Prompt Dialog" section above the action list. It maps onto the scene fields like this:
@@ -699,19 +707,71 @@ Card `{id, type: "PC_BOOT", name, param: {uid}}`, with Name plus a picker for wh
 - The store shows `pluginType` as "Widgets" or "Images". Every pack in the store today is "Widgets".
 - Packs can be uninstalled and reloaded from the palette.
 
-## Cloud icon library (no login) **[C]**, checked 2026-11-22
-- `GET https://gatewayssl.dev.aiks360.com/api/v1/base-service/pub/icon/tags/locales/allGrouped` with `Accept-Language: en-US`. Returns `data: {group: [{id, tag}], category: [...], iconStyle: [...]}`.
-- `GET …/pub/icon/v2/page?pi=<page>&ps=<size>&keyword=&group=<bool>&projectId=&groupId=&categoryId=&iconStyleId=`. Returns `{current, size, total, records: [{id, name, path, groupName, categoryName, iconStyleName, tags, projectId}]}`.
-- `path` is an https PNG on a CDN; there were 39,800 icons on 2026-11-22.
-- The picker has search, Group/Category/Style filters and page controls. The editors for card icons, gesture prompt images and VivoCube buttons all use it.
+## Cloud icon library (no login) **[C]**, checked 2026-11-22 and live on 2026-11-23
+- **Tags:** `GET https://gatewayssl.dev.aiks360.com/api/v1/base-service/pub/icon/tags/locales/allGrouped`.
+  - The only header is `Accept-Language`, which the official app takes from its language setting (`en-US` by default). The tag names follow it, e.g. `zh-CN` gives Chinese names.
+  - The reply needs `state == 200`. It returns `data: {group: [{id, tag}], category: [...], iconStyle: [...]}`: 5 groups, 12 categories, and 2 styles ("Monochrome", "Color").
+- **Pages:** `GET …/pub/icon/v2/page`. The official picker always sends all eight parameters, empty when unused:
+  - `pi`: the page, from 1. A new search or filter starts again at 1.
+  - `ps`: 50.
+  - `keyword`: the search text.
+  - `group`: always `false`. With `true`, the server returns albums instead (`records: [{description, icons: [{id, path, tags}]}]`).
+  - `projectId`: 20 for the "Icon" tab and 30 for the "Background" tab. The Background tab hides the filters.
+  - `groupId`, `categoryId`, `iconStyleId`: the picked tag, or empty for "All".
+- **Page replies:** `{current, size, total, records: [{id, name, path, groupName, categoryName, iconStyleName, tags, projectId}]}`. The official app reads `total` and `records[].path`.
+  - `path` is a 256 px PNG on the CDN, sometimes on plain `http://`.
+  - On 2026-11-22 there were 39,800 icons in total, 39,199 of them in project 20.
+- **Filters:** three rows of pills (Group, Category, Style), each starting with "All". The rows combine.
+- **Picked icons:** the official app keeps the icon's URL and sends it as is. It isn't put in the deploy zip. The editors for card icons, profile pictures, gesture prompt images and VivoCube buttons all use this picker.
+- **Mono icons:** light grey to white (about `#c0c0c0`–`#e0e0e0`) on a transparent background. They show fine on dark cards. The official app shows them as they are, with no tinting, over the `#232426` card background.
+- **This app:**
+  - It sends the same parameters, with `projectId` 20 only (no Background tab).
+  - It downloads the picked icon and keeps it as a PNG. The card art is drawn on a canvas, which a cross-origin image would make unreadable, and the image then goes to the bar with the other card images.
 
 ## Store **[C]**
-- Both the app list (`fetchListV2`) and the plugin list (`plugin/page`) take a `keyword` search parameter.
-- Update checks for installed apps call `apps/100/<package>/fetchLastVerV3` (this app uses V2).
+- **App list:** `POST apps/100/fetchListV2` with `{"keyword": "", "pi": <page>, "ps": 20}`.
+- **Plugin list:** `GET plugin/page?keyword=&pi=<page>&ps=20`.
+- **Search:** the official app always sends `keyword` empty, so it has no working search. The server does filter on it (checked live on 2026-11-23: `keyword` in the app list's JSON body, and in the plugin list's query string). A `keyword` in the app list's query string is ignored.
+- **Update checks:** each installed app gets `POST apps/100/<package>/fetchLastVerV3` with `Content-Type: application/json`, an empty body and an 8 s timeout.
+  - The reply is V2's record wrapped in `{state: 200, msg: "ok", data: {…}}`. The official app reads `data.versionName` and `data.versionCode` and offers "Update (versionName)" when the code is newer.
+  - An unknown package returns `{state: 200, msg: "ok"}` with no `data`. V2 returns the bare record (an empty body for an unknown package). V3 doesn't accept `GET`.
+- **This app:** it searches as above, after typing pauses. It checks each app on the bar with V3 (sending `{}` as the body, which works), and it reads 100 records a page.
 
 ## Other editors **[C]**
-- **Weather:** the card editor shows whether the AccuWeather key is set, and takes optional lat/lon. With no coordinates "the weather for the current network location will be used". The key dialog stores `isUnitFahrenheit` and sends `metric`.
-- **Home Assistant:** the palette groups `1002 "sys.widget.iot"` items by category, with Refresh. Cards are only ever `SCENE` + `param.type: "HA_SCENE"`, with name, icon and zoom.
+- **Weather:** the card editor shows whether the AccuWeather key is set, and takes optional lat/lon. Under them it says "If no coordinates are configured, the weather for the current network location will be used." The key dialog stores `isUnitFahrenheit` and sends `metric`.
+  - The card always sends `param: {lat, lon}` as strings, so with no coordinates it's `{"lat": "", "lon": ""}`.
+  - Each field is checked only when filled: it must be a number in [-90, 90] or [-180, 180] (max 10 characters). Filling only one is accepted.
+  - What the launcher does with one coordinate, or none, hasn't been read from its code. The network-location behavior comes from the official app's text.
+- **Home Assistant:** the palette groups `1002 "sys.widget.iot"` items by category, with Refresh. Cards are only ever `SCENE` + `param.type: "HA_SCENE"`.
+  - The deployData is `{type: "SCENE", id: <the 1002 item id>, param: {type: "HA_SCENE"}, icon, iconScale}`. **No `name`** (the editor, "Home Assistant Scene", has only an Icon field) and no `bgColor`.
+  - The icon is the raw icon with its transparent border trimmed, not a composed card. Zoom (`iconScale`) runs from 10 to 100 in steps of 10 and defaults to 50.
+  - A local icon goes into the deploy zip as `file://image/<card uid>.png`; a cloud icon is sent as its URL.
+
+## Card images on the bar (launcher 1.0.9) **[code]** / this app
+- **The upload:** `UploadServiceIns.uploadZip(subDir, file, isFull)` unpacks the zip into `getExternalFilesDir(null)/<subDir>`. With `isFull` (the default) it empties that folder first. It then reloads the home screen. The file name must end in `.zip`, and the limit is 50 MB.
+- **The loaders:** `GlideExtend.loadSmartCore` (and `PicassoExtend.loadSmart`) resolve the path:
+  - http(s) URLs load as they are, and `resId://` loads a drawable.
+  - Otherwise they strip `file://` and load the file if it exists.
+  - A relative path that isn't there is looked up in `getExternalFilesDir(null)`, so `file://<subDir>/image/x.png` finds the uploaded file.
+- **Every image this app sends goes through these loaders:**
+  - computer-action cards (`PcControlHolder`)
+  - shortcut-group cards and their buttons (`HotKeyGroupHolder`, `RemoteAdapter`)
+  - multi-action and Home Assistant scene cards (`SceneHolder.setSceneImageV2`)
+  - gesture prompts (`SceneDialog.setImage`)
+  - profile pictures (`ProfileAdapter`, `ProfilePanel.setCurrent`)
+- **The official app:**
+  - It uploads with no query string, so the zip replaces the launcher's whole asset folder.
+  - It uploads last, after `30500`.
+  - It points at `file://image/<name>.png`.
+- **This app:**
+  - It puts every card image, button icon and profile picture into one zip as `image/<content hash>.png`.
+  - It posts the zip to `/upload/zip?subDir=ultrabar-app&isFull=true` before sending anything else, then points the payloads at `file://ultrabar-app/image/<hash>.png`.
+  - When that fails, it serves the same files from its own HTTP server for that deploy and says so.
+  - Firmware before 1.0.9 has no upload, so it always uses the HTTP server.
+  - The empty refresh zip after `1108` uses `isFull=false`, so the images stay.
+- **Not checked on a bar yet:**
+  - That the launcher accepts a zip with only file entries (no directory entries).
+  - That Home Assistant scene cards draw their `icon` like multi-action cards. Both come from `SceneHolder`; this app gives them the same full-card art.
 - **Profiles:** the profile menu has Edit name, "Save as preferred" (default, star icon) and Delete ("The default profile cannot be deleted"). A profile is deployed as `{id, name, showName, icon, iconScale, default, widget, module}`.
 - **App:**
   - `.umpf` project files (SQLite) with New/Open/Save As and a recent list.

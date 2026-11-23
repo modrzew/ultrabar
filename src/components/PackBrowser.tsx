@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, LayoutGrid, Plus } from "lucide-react";
+import { AlertTriangle, LayoutGrid, Plus, Search } from "lucide-react";
 import { api, errorMessage, type StorePlugin } from "../lib/api";
 import { useApp } from "../lib/store";
-import { packWidget } from "../lib/market";
+import { packWidget, useStoreSearch } from "../lib/market";
 import { isMac } from "../lib/hid";
 import { Button, Empty, Modal, Spinner } from "./ui";
 
@@ -11,6 +11,9 @@ import { Button, Empty, Modal, Spinner } from "./ui";
 export function PackBrowser({ profileId, index, onClose }: { profileId: string; index?: number; onClose: () => void }) {
   const market = useApp((s) => s.market);
   const [adding, setAdding] = useState<number | null>(null);
+  const [query, setQuery] = useState("");
+  const search = useStoreSearch(query, api.storePlugins);
+  const plugins = search.results ?? market.plugins;
 
   useEffect(() => {
     void useApp.getState().loadMarket();
@@ -45,17 +48,26 @@ export function PackBrowser({ profileId, index, onClose }: { profileId: string; 
         Ready-made sets of buttons from the UltraBar store. A pack becomes one card; tapping it on the bar opens a page of buttons.
         {isMac && " Most packs use Windows shortcuts (Ctrl rather than ⌘)."}
       </p>
-      {market.state === "error" ? (
+      <div className="input-affix" style={{ marginBottom: 12 }}>
+        <Search size={13} style={{ position: "absolute", left: 9, color: "var(--text-3)" }} />
+        <input className="input" style={{ paddingLeft: 28 }} placeholder="Search packs" value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} aria-label="Search packs" autoFocus />
+        {search.loading && <span className="suffix"><Spinner /></span>}
+      </div>
+      {search.error ? (
+        <Empty icon={<AlertTriangle size={22} />} title="Couldn't search the store">{search.error}</Empty>
+      ) : market.state === "error" && !search.results ? (
         <Empty icon={<AlertTriangle size={22} />} title="Couldn't load the store" action={<Button onClick={() => void useApp.getState().loadMarket(true)}>Try again</Button>}>
           {market.error}
         </Empty>
-      ) : market.state !== "ready" ? (
+      ) : market.state !== "ready" && !search.results ? (
         <div className="row" style={{ justifyContent: "center", padding: 32 }}><Spinner /></div>
-      ) : !market.plugins.length ? (
-        <Empty icon={<LayoutGrid size={22} />} title="No packs in the store" />
+      ) : !plugins.length ? (
+        search.results
+          ? <Empty icon={<Search size={22} />} title="No matches">Nothing in the store matches “{query.trim()}”.</Empty>
+          : <Empty icon={<LayoutGrid size={22} />} title="No packs in the store" />
       ) : (
         <div className="group">
-          {market.plugins.map((p) => (
+          {plugins.map((p) => (
             <div className="group-row" key={p.id}>
               <span className="ico">{p.icon ? <img src={p.icon} alt="" /> : <LayoutGrid size={16} />}</span>
               <div className="txt">

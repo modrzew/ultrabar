@@ -9,6 +9,7 @@ import { DOT_KEYS, KNOB_BUTTON, OFFLINE_KNOB_TARGETS, PRODUCTS, knobTargetName, 
 import { KEY_EVENTS } from "../lib/deploy";
 import { isMac } from "../lib/hid";
 import { ActionList } from "./Actions";
+import { ModuleDetails } from "./ModuleDetails";
 import { ModuleDevice } from "./ModuleRail";
 import { Button, Modal, Segmented, Spinner } from "./ui";
 
@@ -19,6 +20,7 @@ export function ModuleInspector({ profileId, serial }: { profileId: string; seri
   const profile = useApp((s) => s.doc.profiles.find((p) => p.id === profileId));
   const profiles = useApp((s) => s.doc.profiles.length);
   const online = useApp((s) => (s.status.state === "online" ? s.moduleOnline[serial] : undefined));
+  const [details, setDetails] = useState(false);
   if (!m || !profile) return null;
   const s = useApp.getState();
   const setup = profile.modules?.find((x) => x.serialNumber === serial);
@@ -44,7 +46,9 @@ export function ModuleInspector({ profileId, serial }: { profileId: string; seri
           <ArrowLeft size={15} />
         </Button>
         <h3><Icon size={14} className="faint" /> <span className="truncate">{m.name}</span></h3>
+        <Button variant="ghost" icon size="sm" onClick={() => setDetails(true)} title="Module details" aria-label="Module details"><Info size={14} /></Button>
       </div>
+      {details && <ModuleDetails serial={serial} onClose={() => setDetails(false)} />}
       <div className="panel-body" key={serial}>
         {online === false && (
           <div className="callout warn" style={{ marginBottom: 12 }}>

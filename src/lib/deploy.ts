@@ -26,9 +26,37 @@ export function barAppIconUrl(pkg: string, host = "127.0.0.1") {
   return `http://${host}:8080/widget/icon?id=${encodeURIComponent(pkg)}&type=application&scheme=30`;
 }
 
-/** Cards whose whole face is an image this app draws (color + symbol). */
+/** A Home Assistant scene: a `SCENE` card that runs the entity. */
+export function isHaScene(w: Widget) {
+  return w.type === "DEVICE" && w.device?.deviceType === "SCENE";
+}
+
+/** Cards whose whole face is an image this app draws (color + symbol). Home
+ * Assistant scene cards are drawn by the same holder as multi-actions, so
+ * they get the same art once they have an icon. */
 export function hasCardArt(w: Widget) {
-  return w.type === "PC_CONTROL" || w.type === "SCENE" || w.type === "HOT_KEY_GROUP";
+  return w.type === "PC_CONTROL" || w.type === "SCENE" || w.type === "HOT_KEY_GROUP" || (isHaScene(w) && !!w.icon);
+}
+
+/** Images go to the bar in a zip (launcher 1.0.9+), unpacked into this
+ * folder of its files directory. Its image loaders resolve `file://` paths
+ * that don't exist as absolute paths against that directory. */
+export const BAR_IMAGES = "file://ultrabar-app/image/";
+
+export function barImageUrl(id: string) {
+  return `${BAR_IMAGES}${id}.png`;
+}
+
+/** The same payload with every bar image loaded from `base` (this computer's
+ * image server, `<base><id>.png`) instead: for firmware without the asset
+ * upload, or when the upload failed. */
+export function withImagesFrom<T>(v: T, base: string): T {
+  if (typeof v === "string") return (v.startsWith(BAR_IMAGES) ? base + v.slice(BAR_IMAGES.length) : v) as T;
+  if (Array.isArray(v)) return v.map((x) => withImagesFrom(x, base)) as T;
+  if (v && typeof v === "object") {
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, withImagesFrom(x, base)])) as T;
+  }
+  return v;
 }
 
 /** Card types the bar no longer has (firmware 1.0.9 shows them as "Not available"). */
@@ -64,7 +92,8 @@ export function widgetPayload(w: Widget, iconUrl?: string, buttonIcons: (string 
       p.param = { offset: zoneOffset(w.worldTime?.zone ?? "UTC") };
       break;
     case "WEATHER":
-      p.param = { lat: w.weather?.lat ?? "", lon: w.weather?.lon ?? "" };
+      // Both empty: the bar uses its network location (sent like the official app does).
+      p.param = { lat: w.weather?.lat?.trim() ?? "", lon: w.weather?.lon?.trim() ?? "" };
       break;
     case "SOUNDSCAPE":
       p.param = { id: w.soundscape?.id };
@@ -86,8 +115,9 @@ export function widgetPayload(w: Widget, iconUrl?: string, buttonIcons: (string 
       break;
     case "DEVICE":
       if (w.device) p.type = w.device.deviceType;
-      // Home Assistant scenes are SCENE cards that run the entity (the id).
-      if (w.device?.deviceType === "SCENE") p.param = { type: "HA_SCENE" };
+      // Home Assistant scenes are SCENE cards that run the entity (the id),
+      // with an optional icon and zoom.
+      if (isHaScene(w)) p.param = { type: "HA_SCENE" };
       break;
     case "HOT_KEY_GROUP":
       // Tapping the card opens a page with these buttons in two rows. Kept
@@ -104,6 +134,12 @@ export function widgetPayload(w: Widget, iconUrl?: string, buttonIcons: (string 
       break;
   }
   return p;
+}
+
+/** A weather card with one coordinate but not the other. (Neither means the
+ * bar's network location.) */
+export function halfLocation(w: Widget) {
+  return w.type === "WEATHER" && !w.weather?.lat?.trim() !== !w.weather?.lon?.trim();
 }
 
 export function actionPayload(a: Action): Record<string, unknown> {
@@ -198,7 +234,7 @@ export function findProblems(doc: Doc, triggerTypes?: string[], ctx: DeployConte
       if (w.type === "PC_CONTROL" && !pcIsComplete(w.pc)) out.push({ where, message: "Action isn't set up yet", ...at });
       if (w.type === "SCENE" && !w.actions?.length) out.push({ where, message: "Has no actions", ...at });
       if (w.type === "HOT_KEY_GROUP" && !w.group?.buttons.length) out.push({ where, message: "Has no buttons", ...at });
-      if (w.type === "WEATHER" && (!w.weather?.lat || !w.weather?.lon)) out.push({ where, message: "Needs a location", ...at });
+      if (w.type === "WEATHER" && halfLocation(w)) out.push({ where, message: "Has only a latitude or only a longitude. Fill in both, or clear both to use the bar's network location", ...at });
       if (w.type === "SCENE") {
         for (const a of w.actions ?? []) {
           if (a.type === "PC_CONTROL" && !pcIsComplete(a.pc)) out.push({ where, message: `“${a.summary}” isn't set up yet`, ...at });
@@ -239,8 +275,9 @@ export interface Plan {
 }
 
 /** `iconUrl` serves a card's icon; `cardArtUrl` the full card face of
- * computer-action, multi-action and shortcut-group cards (see `hasCardArt`);
- * `pngUrl` any other image (shortcut-group buttons, profile pictures). */
+ * computer-action, multi-action, shortcut-group and Home Assistant scene
+ * cards (see `hasCardArt`); `pngUrl` any other image (shortcut-group
+ * buttons, profile pictures). */
 export async function buildPlan(
   doc: Doc,
   iconUrl: (w: Widget) => Promise<string | undefined>,

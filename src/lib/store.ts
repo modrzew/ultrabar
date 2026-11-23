@@ -6,7 +6,7 @@ import {
 import type { Automation, Doc, ModuleEndpoint, ModulePlacement, ModuleSetup, Profile, Widget } from "./model";
 import { uid } from "./model";
 import { newWidget, pcMeta } from "./widgets";
-import { buildPlan, docHash, fitsOneLine, lineSize, modulesPayload, type DeployContext } from "./deploy";
+import { barImageUrl, buildPlan, docHash, fitsOneLine, isHaScene, lineSize, modulesPayload, withImagesFrom, type DeployContext, type Plan } from "./deploy";
 import { cardArtPng, glyphPng } from "./icons";
 
 export type View =
@@ -91,6 +91,9 @@ export interface Market {
   plugins: StorePlugin[];
   state: "idle" | "loading" | "ready" | "error";
   error?: string;
+  /** Latest store version per installed app (`fetchLastVerV3`); null when
+   * the store doesn't have it. Missing until checked. */
+  latest: Record<string, StoreApp | null>;
 }
 
 /** An app the bar is installing or removing. The bar does one at a time. */
@@ -157,6 +160,8 @@ interface State {
   dismissToast(id: string): void;
   loadCatalog(): Promise<void>;
   loadMarket(force?: boolean): Promise<void>;
+  /** Asks the store for the latest version of each app on the bar. */
+  checkAppUpdates(): Promise<void>;
   installApp(pkg: string, name: string): Promise<void>;
   uninstallApp(pkg: string, name: string): Promise<void>;
   runDeploy(): Promise<void>;
@@ -243,7 +248,7 @@ export const useApp = create<State>((set, get) => ({
   toasts: [],
   pcLog: [],
   connectOpen: false,
-  market: { apps: [], plugins: [], state: "idle" },
+  market: { apps: [], plugins: [], state: "idle", latest: {} },
   appJobs: {},
   past: [],
   future: [],
@@ -439,10 +444,21 @@ export const useApp = create<State>((set, get) => ({
     set({ market: { ...m, state: "loading", error: undefined } });
     try {
       const [apps, plugins] = await Promise.all([api.storeApps(), api.storePlugins()]);
-      set({ market: { apps, plugins, state: "ready" } });
+      set({ market: { ...get().market, apps, plugins, state: "ready" } });
     } catch (e) {
       set({ market: { ...get().market, state: "error", error: errorMessage(e) } });
     }
+  },
+
+  async checkAppUpdates() {
+    // One lookup per app, as the official app does; failures are left unchecked.
+    const found = await Promise.all(get().catalog.apps.map(async (a) => {
+      const latest = await api.storeAppLatest(a.application).catch(() => undefined);
+      return [a.application, latest] as const;
+    }));
+    const latest = { ...get().market.latest };
+    for (const [pkg, v] of found) if (v !== undefined) latest[pkg] = v;
+    set({ market: { ...get().market, latest } });
   },
 
   async installApp(pkg, name) {
@@ -483,23 +499,25 @@ export const useApp = create<State>((set, get) => ({
     const warnings: string[] = [];
     const ctx = deployContext(get());
     try {
-      const published = new Map<string, string>();
-      const publish = async (png: string) => {
-        if (!published.has(png)) published.set(png, await api.publishIcon(png));
-        return published.get(png)!;
+      // Every image goes to the bar as `file://ultrabar-app/image/<id>.png`
+      // and is uploaded below; ids are content hashes kept on this computer.
+      const images = new Map<string, string>();
+      const image = async (png: string) => {
+        if (!images.has(png)) images.set(png, await api.storeIcon(png));
+        return barImageUrl(images.get(png)!);
       };
-      const plan = await buildPlan(
+      let plan = await buildPlan(
         doc,
         async (w) => {
           if (!w.icon) return undefined;
-          return w.icon.kind === "url" ? w.icon.url : publish(w.icon.png);
+          return w.icon.kind === "url" ? w.icon.url : image(w.icon.png);
         },
         async (w) => {
-          const fallback = w.type === "PC_CONTROL" && w.pc ? pcMeta(w.pc).glyph : w.type === "HOT_KEY_GROUP" ? "layout-grid" : "layers";
+          const fallback = w.type === "PC_CONTROL" && w.pc ? pcMeta(w.pc).glyph : w.type === "HOT_KEY_GROUP" ? "layout-grid" : isHaScene(w) ? "sparkles" : "layers";
           const icon = w.icon?.kind === "url" ? w.icon.url : w.icon?.png ?? (await glyphPng(fallback, "#ffffff"));
-          return publish(await cardArtPng(w.bgColor ?? "#24252b", icon, w.iconScale));
+          return image(await cardArtPng(w.bgColor ?? "#24252b", icon, w.iconScale));
         },
-        publish,
+        image,
         ctx,
       );
 
@@ -510,11 +528,34 @@ export const useApp = create<State>((set, get) => ({
       const sendScenes = plan.scenes.length > 0 || !legacy;
       // Each message must fit in one line; check before sending anything so
       // a failed deploy doesn't leave the bar half-updated.
-      if (sendScenes && !fitsOneLine(scenesAct, plan.scenes)) {
-        throw new Error(`Your multi-actions and automations are too large to send in one go (${kb(lineSize(scenesAct, plan.scenes))} of 8 KB). Remove a few actions and try again.`);
-      }
-      if (!fitsOneLine(ACT.saveProfiles, plan.profiles)) {
-        throw new Error(`Your profiles are too large to send in one go (${kb(lineSize(ACT.saveProfiles, plan.profiles))} of 8 KB). Remove a few cards, actions or shortcut-group buttons, or shorten long names, commands and text.`);
+      const checkSizes = (p: Plan) => {
+        if (sendScenes && !fitsOneLine(scenesAct, p.scenes)) {
+          throw new Error(`Your multi-actions and automations are too large to send in one go (${kb(lineSize(scenesAct, p.scenes))} of 8 KB). Remove a few actions and try again.`);
+        }
+        if (!fitsOneLine(ACT.saveProfiles, p.profiles)) {
+          throw new Error(`Your profiles are too large to send in one go (${kb(lineSize(ACT.saveProfiles, p.profiles))} of 8 KB). Remove a few cards, actions or shortcut-group buttons, or shorten long names, commands and text.`);
+        }
+      };
+      // Firmware before 1.0.9 can't take the images, so it loads them from
+      // this computer's image server.
+      const fromThisComputer = async () => {
+        const base = await api.iconHttpBase();
+        plan = { ...plan, profiles: withImagesFrom(plan.profiles, base), scenes: withImagesFrom(plan.scenes, base) };
+        checkSizes(plan);
+      };
+      if (legacy && images.size) await fromThisComputer();
+      else checkSizes(plan);
+
+      if (!legacy && images.size) {
+        // Before anything that points at them. This replaces the images
+        // uploaded by the last deploy.
+        progress("Sending images");
+        try {
+          await api.uploadBarImages([...new Set(images.values())]);
+        } catch (e) {
+          await fromThisComputer();
+          warnings.push(`Images: the bar didn't take them (${errorMessage(e)}), so it loads them from this computer for now. They only show while ultrabar runs here; deploy again to fix that.`);
+        }
       }
 
       if (plan.modules) {

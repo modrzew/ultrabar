@@ -167,16 +167,41 @@ async fn refresh_bar_screen(state: State<'_, AppState>) -> Result<(), String> {
     screen::reload_home_screen(&ip).await
 }
 
-/// Apps in the vendor's store (the bar downloads and installs them itself).
+/// Apps in the vendor's store (the bar downloads and installs them itself),
+/// optionally matching a search.
 #[tauri::command]
-async fn store_apps() -> Result<Vec<market::StoreApp>, String> {
-    market::apps().await
+async fn store_apps(keyword: Option<String>) -> Result<Vec<market::StoreApp>, String> {
+    market::apps(keyword.as_deref()).await
 }
 
-/// Shortcut packs ("plugins") in the vendor's store.
+/// Shortcut packs ("plugins") in the vendor's store, optionally matching a search.
 #[tauri::command]
-async fn store_plugins() -> Result<Vec<market::StorePlugin>, String> {
-    market::plugins().await
+async fn store_plugins(keyword: Option<String>) -> Result<Vec<market::StorePlugin>, String> {
+    market::plugins(keyword.as_deref()).await
+}
+
+/// The store's latest version of an installed app (null: not in the store).
+#[tauri::command]
+async fn store_app_latest(package: String) -> Result<Option<market::StoreApp>, String> {
+    market::latest_app(&package).await
+}
+
+/// The cloud icon library's filters (group, category, style).
+#[tauri::command]
+async fn icon_library_tags() -> Result<market::IconTags, String> {
+    market::icon_tags().await
+}
+
+/// One page of the cloud icon library.
+#[tauri::command]
+async fn icon_library_page(query: market::IconQuery) -> Result<market::IconPage, String> {
+    market::icon_page(&query).await
+}
+
+/// A picked library icon as a data URL.
+#[tauri::command]
+async fn icon_library_image(url: String) -> Result<String, String> {
+    market::icon_image(&url).await
 }
 
 /// Downloads a shortcut pack, checks it against the catalog's hash and unpacks it.
@@ -293,10 +318,17 @@ async fn discord_sounds(state: State<'_, AppState>) -> Result<Vec<discord::Sound
     state.discord.sounds().await
 }
 
-/// Store a PNG icon and return the URL the bar should load it from.
+/// Store a PNG image (data URL or base64) for the bar; returns its id.
 #[tauri::command]
-fn publish_icon(state: State<'_, AppState>, data: String) -> Result<String, String> {
-    let hash = state.icons.put(&data)?;
+fn store_icon(state: State<'_, AppState>, data: String) -> Result<String, String> {
+    state.icons.put(&data)
+}
+
+/// Where the bar loads stored images from this computer:
+/// `<base><id>.png`. Used by firmware without the asset upload, and when an
+/// upload fails.
+#[tauri::command]
+fn icon_http_base(state: State<'_, AppState>) -> Result<String, String> {
     let port = state.icons.port();
     if port == 0 {
         return Err("The icon server isn't running".into());
@@ -309,7 +341,23 @@ fn publish_icon(state: State<'_, AppState>, data: String) -> Result<String, Stri
         .clone()
         .or_else(lan_ip)
         .ok_or("Couldn't determine this computer's network address")?;
-    Ok(format!("http://{ip}:{port}/i/{hash}.png"))
+    Ok(format!("http://{ip}:{port}/i/"))
+}
+
+/// Replace this app's images on the bar (launcher 1.0.9+) with the given
+/// stored ones. They're then reachable as `file://ultrabar-app/image/<id>.png`.
+#[tauri::command]
+async fn upload_bar_images(state: State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
+    let ip = state
+        .status
+        .lock()
+        .unwrap()
+        .bar
+        .as_ref()
+        .map(|b| b.ip.clone())
+        .ok_or("No bar selected")?;
+    let zip = state.icons.zip(&ids)?;
+    screen::upload_images(&ip, &zip).await
 }
 
 /// Export/import of the layout file at a path the user picked in a dialog.
@@ -401,7 +449,11 @@ pub fn run() {
             refresh_bar_screen,
             store_apps,
             store_plugins,
+            store_app_latest,
             store_plugin_pack,
+            icon_library_tags,
+            icon_library_page,
+            icon_library_image,
             load_doc,
             save_doc,
             set_allowed_actions,
@@ -416,7 +468,9 @@ pub fn run() {
             discord_check,
             discord_voice_channels,
             discord_sounds,
-            publish_icon,
+            store_icon,
+            icon_http_base,
+            upload_bar_images,
             write_json_file,
             read_json_file,
         ])

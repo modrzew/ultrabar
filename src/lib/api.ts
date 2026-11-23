@@ -124,6 +124,35 @@ export interface Pack {
   buttons: { name: string; spanSize: number; icon?: string | null; param: unknown }[];
 }
 
+/** A filter value in the cloud icon library. */
+export interface IconTag {
+  id: number;
+  tag: string;
+}
+
+export interface IconTags {
+  group: IconTag[];
+  category: IconTag[];
+  iconStyle: IconTag[];
+}
+
+/** An icon in the vendor's cloud library; `path` is an http(s) PNG. */
+export interface LibraryIcon {
+  id: number;
+  name: string;
+  path: string;
+  iconStyleName?: string | null;
+}
+
+/** One page of the library (50 icons). Unset filters mean "All". */
+export interface IconQuery {
+  page: number;
+  keyword?: string;
+  groupId?: number | null;
+  categoryId?: number | null;
+  iconStyleId?: number | null;
+}
+
 type Mock = typeof import("./mock");
 let mockMod: Promise<Mock> | null = null;
 const mock = () => (mockMod ??= import("./mock"));
@@ -157,7 +186,16 @@ export const api = {
   setPcAgentEnabled: (enabled: boolean) => call<void>("set_pc_agent_enabled", { enabled }),
   testPcAction: (payload: unknown) => call<void>("test_pc_action", { payload }),
   runningApps: () => call<RunningApp[]>("running_apps"),
-  publishIcon: (data: string) => call<string>("publish_icon", { data }),
+  /** Keeps a PNG (data URL) for the bar; returns its id (a content hash). */
+  storeIcon: (data: string) => call<string>("store_icon", { data }),
+  /** `<base><id>.png` serves a stored image from this computer. */
+  iconHttpBase: () => call<string>("icon_http_base"),
+  /** Replaces this app's images on the bar (launcher 1.0.9+). */
+  uploadBarImages: (ids: string[]) => call<void>("upload_bar_images", { ids }),
+  iconLibraryTags: () => call<IconTags>("icon_library_tags"),
+  iconLibraryPage: (query: IconQuery) => call<{ total: number; icons: LibraryIcon[] }>("icon_library_page", { query }),
+  /** A library icon as a data URL (so it can be drawn into card art). */
+  iconLibraryImage: (url: string) => call<string>("icon_library_image", { url }),
   /** Whether the bar's Home Assistant app is logged in (its own status page). */
   haLoggedIn: (port: number) => call<boolean>("ha_logged_in", { port }),
   discordStatus: () => call<DiscordStatus>("discord_status"),
@@ -167,8 +205,12 @@ export const api = {
   discordCheck: () => call<DiscordStatus>("discord_check"),
   discordVoiceChannels: () => call<DiscordGuild[]>("discord_voice_channels"),
   discordSounds: () => call<DiscordSound[]>("discord_sounds"),
-  storeApps: () => call<StoreApp[]>("store_apps"),
-  storePlugins: () => call<StorePlugin[]>("store_plugins"),
+  /** Store apps; `keyword` uses the store's own search. */
+  storeApps: (keyword?: string) => call<StoreApp[]>("store_apps", { keyword: keyword?.trim() || null }),
+  /** Shortcut packs; `keyword` uses the store's own search. */
+  storePlugins: (keyword?: string) => call<StorePlugin[]>("store_plugins", { keyword: keyword?.trim() || null }),
+  /** The store's latest version of an app (`fetchLastVerV3`), null when it isn't in the store. */
+  storeAppLatest: (pkg: string) => call<StoreApp | null>("store_app_latest", { package: pkg }),
   storePluginPack: (p: StorePlugin) => call<Pack>("store_plugin_pack", { file: p.file, sha256: p.sha256, icon: p.icon ?? null }),
 };
 
@@ -206,6 +248,8 @@ export const ACT = {
   moduleDiscoveryStop: 30101,
   moduleDiscovered: 30102,
   coreBarConfig: 30300,
+  /** `{serialNo, deviceId, propertyId, extra}` → `{result}`: reads a module property. */
+  readModuleProperty: 30200,
   /** Replaces all scenes (firmware 1.0.9+). */
   saveScenes: 30500,
   /** The same before 1.0.9, where 30500 saved a single scene. */

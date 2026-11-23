@@ -1,6 +1,7 @@
 // Shortcut packs from the vendor's store become shortcut-group cards. (Store
 // apps need nothing here: the bar downloads and installs them itself.)
-import type { Pack, StorePlugin } from "./api";
+import { useEffect, useState } from "react";
+import { errorMessage, type Pack, type StorePlugin } from "./api";
 import type { GroupButton, IconSpec, PcControl, Widget } from "./model";
 import { uid } from "./model";
 import { PC_ACTIONS, newWidget } from "./widgets";
@@ -59,4 +60,37 @@ export async function packWidget(pack: Pack, plugin: StorePlugin): Promise<{ wid
     group: { buttons, pack: { id: plugin.id, name: plugin.name, versionCode: plugin.versionCode ?? undefined } },
   });
   return { widget, skipped: pack.buttons.length - buttons.length };
+}
+
+export interface StoreSearch<T> {
+  /** Null while the search box is empty. */
+  results: T[] | null;
+  loading: boolean;
+  error: string | null;
+}
+
+/** The store's own keyword search, sent once typing pauses. `fetch` must be
+ * a stable function (e.g. `api.storeApps`). */
+export function useStoreSearch<T>(query: string, fetch: (keyword: string) => Promise<T[]>): StoreSearch<T> {
+  const [state, setState] = useState<StoreSearch<T>>({ results: null, loading: false, error: null });
+  useEffect(() => {
+    const keyword = query.trim();
+    if (!keyword) {
+      setState({ results: null, loading: false, error: null });
+      return;
+    }
+    let cancelled = false;
+    setState((s) => ({ ...s, loading: true, error: null }));
+    const timer = setTimeout(() => {
+      fetch(keyword).then(
+        (results) => !cancelled && setState({ results, loading: false, error: null }),
+        (e) => !cancelled && setState({ results: [], loading: false, error: errorMessage(e) }),
+      );
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query, fetch]);
+  return state;
 }
