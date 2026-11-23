@@ -563,3 +563,103 @@ A knob bound to `pc:volume` or `pc:bright` pushes `{type: "SET_VOLUME"|"SET_BRIG
 - The app's web server (port from `1000`, `config: true`) answers `GET /status` with `{"status":"success","data":<logged in>}` without a session token.
 - Home Assistant scene cards are `SCENE` widgets with the entity id and `param: {type: "HA_SCENE"}`.
 - An address behind Cloudflare Access (or any login page) can't work: the websocket upgrade gets a 302 to the login page.
+
+# Official desktop app features (V1.0.1.0, 2026-11-22)
+
+Read from the official app's macOS build (x86_64 slice, symbols intact), and checked against the Windows build. **[C]** means read from that code. **[I]** means inferred, so check it on a bar first. The app sends no opcodes beyond those listed above. What's new here is how it uses them. The gap list against this app is in `official-app-gaps.md`.
+
+## Builds
+- Windows and macOS have the same feature classes. Only the OS layer differs:
+  - **Windows:** text typed with `SendInput`, CPU from PDH, network from `GetIfTable2`, brightness over DDC/CI (`dxva2`) with a WMI fallback, apps found via ToolHelp and `EnumWindows`, and `.exe`/`.lnk` files in the app picker.
+  - **macOS:** apps brought forward with AppleScript `activate`.
+- The bundled `libusb-1.0.dll` and `Qt6SerialPort.dll` are never imported, so the app has no USB or serial link to the bar. **[C]**
+
+## Module products **[C]**
+`productId` names: `0x10000001` `DOT_KEY`, `0x10000002` `KNOB_KEY`, `0x10000003` `VIVO_CUBE`, `0x10000004` `SENSE_CUBE`, `0x10000005` `PC_BOOT` (this app calls it `PC_POWER_CARD`). Default names: "Dot Key", "Knob Key", "Vivo Cube", "Sense Cube", "PC Boot".
+
+## Adding, replacing and inspecting modules **[C]**
+- The device list menu has **Config**, **Detail**, **Replace** and **Delete**.
+- Adding a module:
+  - The add dialog scans with `30100` (`"can"` for pogo-pin "QuantumLink" modules, `"mesh"` for wireless ones). It lists the modules found with an "Added" column.
+  - The app picks a free `netId` itself ("Module exceeds count limit" when none is left), then sends `30300` **right away**, not on the next project deploy.
+  - Mesh devices are paired one by one with `30103 {sn, address}`. The result arrives per serial as `{serialNumber, errorCode}`. Error texts: gateway busy, network configuration timeout/failed, AppKey configuration timeout/failed, pairing timeout.
+- **Replace** scans the same way and swaps in the new module's `sn`/`netId` (pairing first for mesh). It keeps the old module's name and per-profile config, then sends `30300`.
+- **Details** shows Name (with rename), ProductId, Device ID, Net ID, and "App Ver" read with `30200` (property 5 **[I]**). It also has the OTA button (out of scope here).
+
+## Gesture prompt (Dot Key, Knob press, VivoCube buttons, Sense Cube taps) **[C]**
+Every gesture editor has a "Prompt Dialog" section above the action list. It maps onto the scene fields like this:
+`{name: promptText, show: promptEnabled, icon: <prompt background image>, actions: [deployData…]}`. Each gesture also has its own **Enabled** switch; disabled gestures aren't sent.
+
+## Sense Cube **[C]**
+- **Per-profile module config:** `{"tap": [{mode, name, show, icon, actions}, …]}`.
+  - `mode` 0–4 picks one of five preset tap rhythms (`mode1`…`mode5` in the UI, each with an animated preview and a Play button).
+  - Only enabled rhythms are listed.
+  - Firmware V2 changed the arming gesture to tap, pause, double tap (release notes).
+- **Cards** (palette group "Module"): `SENSE_CUBE` (temperature and humidity), `SENSE_CUBE_TEMP`, `SENSE_CUBE_HUM`, `SENSE_CUBE_ALS` (light), `SENSE_CUBE_AUDIO` (sound level) and `SENSE_CUBE_RADAR` (presence). Each is `{id, type, name, param: {uid: <module uid>}}`. The editor has Name plus a picker for which Sense Cube.
+
+## PC Boot card **[C]**
+Card `{id, type: "PC_BOOT", name, param: {uid}}`, with Name plus a picker for which PC Boot module. The bar's action tree also has `sc.devices.pcboot`.
+
+## VivoCube (screen module) **[C]** / **[I]** for the tarball layout
+- **Network tab:**
+  - Reads and writes the cube's Wi-Fi with `30200`/`30201`, `deviceId` 256 and `propertyId` 7 (the order of those two args is **[I]**). The value is hex-encoded `ssid` + `password` (144 bytes).
+  - "Search" uses `1633`/`1634`. Results show 2.4 GHz networks with a 0–4 signal level.
+  - The config is also stored as `extraConfig.netConfig` and sent with `30300`.
+- **Layer and Widget tab:**
+  - Layers can be added, renamed, deleted and set as default (`defaultLayer`), up to a maximum count.
+  - Each layer holds widgets of type **Button** or **Toggle**, with a name and pressed/unpressed icons (zoom, cloud picker).
+  - "Deploy" converts the images to LVGL `.bin`, packs a `config.tgz` (paths `widget/<id>/…`, `profile/<pid>/widget/<id>…`) and POSTs it to `http://<bar>:8080/upload?serialNo=<cube sn>`. Upload errors: "VivoCube is currently busy", "VivoCube is not connected to the network".
+- **Per profile:** Click, Double Click and Long Press on each widget, using the same prompt and action editor.
+- **Action `VIVO_CUBE_TOGGLE`:** pick cube → layer → widget. It sends `values: [{id: "1", …}, {id: "2", …}]`.
+
+## System cards **[C]**
+- `CPU`, `MEMORY`, `STORAGE`, `NETWORK` ("CPU Usage", "Memory Usage", "Storage Usage", "Network Speed") have no settings.
+- The bar asks the computer through `act 1000000` with `type` `CPU`/`MEMORY`/`STORAGE`/`NETWORK`. The app replies `{type, payload}`, where `payload` is a number, or `{totalReceived, totalSent}` (byte counters) for `NETWORK`.
+- The app also answers `GET_MUTE`/`SET_MUTE` (bool) and `TEST`. Launcher 1.0.9 lists these widget and push types (see above), so the cards should be live there **[I]**.
+
+## Hotkeys **[C]**
+- Hotkeys are `{output: 5, keys: [...], keysDesc}`, and `keys` uses one 16-bit code space:
+  - keyboard usages as is (`4` = A …)
+  - consumer keys as **10000 + usage**: Play/Pause 10205, Next 10181, Previous 10182, Stop 10183, Fast Forward 10179, Rewind 10180, Vol+ 10233, Vol− 10234, Brightness+ 10111, Brightness− 10112, Display Toggle 10177. There are also browser keys (Back, Forward, Favorites) and app keys (Mail, Calculator, Media Player, My Computer).
+  - system keys as **20000 + usage**: Power 20129, Sleep 20130, Wake 20131.
+- The editor has a recorder plus an on-screen keyboard ("Hot Key Selector") with tabs for System, Media, Application and Browser keys.
+- Whether the bar's hub can send consumer and system usages over its keyboard gadget hasn't been checked **[I]**.
+
+## Start App **[C]**
+- `params.launchMode` is an int:
+  - **0:** always launch (`open "<path>"` on macOS).
+  - **non-zero:** bring the app forward if it's already running, otherwise launch it.
+- The UI calls these "New Instance" and "Single Instance" (which label maps to which number is **[I]**).
+- A "Running List" button fills the path from running GUI apps; on macOS, `LSUIElement`/`LSBackgroundOnly` apps are skipped.
+
+## App Capability actions (`30750`–`30752`) **[C]**
+- Pick an app, then one of its actions. Each param is `{id, name, type, placeholder, required, options, dependsOn}`.
+- `type: "TEXT"` is a text field. Otherwise `options.provider` is `STATIC` (`items: [{label, value}]`) or `REMOTE`. `REMOTE` pages through `30752` with `cursor`/`limit` and a "More" button, using `nextCursor`/`hasMore` from the reply.
+- The action is `{type: "APP_CAPABILITY", values: [{id: "1", value: {packageName, actionId, params}}]}` **[I]** (nesting), and its `configDesc` reads "App Capability: <app> -> <action> (k=v; …)".
+
+## Plugins (shortcut packs) **[C]**
+- An installed pack adds a palette group with the whole pack as a `HOT_KEY_GROUP` card ("Shortcut Group": Name and Icon only) and **every button as its own draggable `PC_CONTROL` card**.
+- The `PLUGIN_WIDGET` action picks an installed pack, then one of its buttons, and becomes `{type: "PC_CONTROL", values: [{id: "1", value: <button param>}]}`.
+- Pack icons are written into the deploy zip as `file://` images.
+- The store shows `pluginType` as "Widgets" or "Images". Every pack in the store today is "Widgets".
+- Packs can be uninstalled and reloaded from the palette.
+
+## Cloud icon library (no login) **[C]**, checked 2026-11-22
+- `GET https://gatewayssl.dev.aiks360.com/api/v1/base-service/pub/icon/tags/locales/allGrouped` with `Accept-Language: en-US`. Returns `data: {group: [{id, tag}], category: [...], iconStyle: [...]}`.
+- `GET …/pub/icon/v2/page?pi=<page>&ps=<size>&keyword=&group=<bool>&projectId=&groupId=&categoryId=&iconStyleId=`. Returns `{current, size, total, records: [{id, name, path, groupName, categoryName, iconStyleName, tags, projectId}]}`.
+- `path` is an https PNG on a CDN; there were 39,800 icons on 2026-11-22.
+- The picker has search, Group/Category/Style filters and page controls. The editors for card icons, gesture prompt images and VivoCube buttons all use it.
+
+## Store **[C]**
+- Both the app list (`fetchListV2`) and the plugin list (`plugin/page`) take a `keyword` search parameter.
+- Update checks for installed apps call `apps/100/<package>/fetchLastVerV3` (this app uses V2).
+
+## Other editors **[C]**
+- **Weather:** the card editor shows whether the AccuWeather key is set, and takes optional lat/lon. With no coordinates "the weather for the current network location will be used". The key dialog stores `isUnitFahrenheit` and sends `metric`.
+- **Home Assistant:** the palette groups `1002 "sys.widget.iot"` items by category, with Refresh. Cards are only ever `SCENE` + `param.type: "HA_SCENE"`, with name, icon and zoom.
+- **Profiles:** the profile menu has Edit name, "Save as preferred" (default, star icon) and Delete ("The default profile cannot be deleted"). A profile is deployed as `{id, name, showName, icon, iconScale, default, widget, module}`.
+- **App:**
+  - `.umpf` project files (SQLite) with New/Open/Save As and a recent list.
+  - A separate "Deploy Automation" button that sends only `30500`.
+  - Single-instance guard.
+  - "Launch at startup".
