@@ -6,9 +6,9 @@ import { useApp } from "../lib/store";
 import { ACT, api } from "../lib/api";
 import type { KeyBinding, KeyEvent, KnobTarget, ModuleEndpoint, ModuleSetup } from "../lib/model";
 import { DOT_KEYS, KNOB_BUTTON, OFFLINE_KNOB_TARGETS, PRODUCTS, knobTargetName, movedPlacements, placedModules } from "../lib/modules";
-import { KEY_EVENTS } from "../lib/deploy";
+import { KEY_EVENTS, gestureRuns } from "../lib/deploy";
 import { isMac } from "../lib/hid";
-import { ActionList } from "./Actions";
+import { GestureEditor } from "./GestureEditor";
 import { ModuleDetails } from "./ModuleDetails";
 import { ModuleDevice } from "./ModuleRail";
 import { Button, Modal, Segmented, Spinner } from "./ui";
@@ -108,17 +108,16 @@ function KeyBindingEditor({ binding, onChange, what }: { binding?: KeyBinding; o
   const [ev, setEv] = useState<KeyEvent>("click");
   const short: Record<KeyEvent, string> = { click: "Click", double: "Double", long: "Hold" };
   const options = KEY_EVENTS.map((e) => {
-    const n = binding?.[e.key]?.length ?? 0;
-    return { value: e.key, label: n ? `${short[e.key]} · ${n}` : short[e.key] };
+    const g = binding?.[e.key];
+    const n = g?.actions.length ?? 0;
+    const label = !n ? short[e.key] : gestureRuns(g) ? `${short[e.key]} · ${n}` : `${short[e.key]} · off`;
+    return { value: e.key, label };
   });
   const verb = ev === "click" ? "click" : ev === "double" ? "double-click" : "hold";
   return (
-    <div className="stack" style={{ gap: 10 }}>
+    <div className="stack" style={{ gap: 12 }}>
       <Segmented full value={ev} onChange={setEv} options={options} />
-      <ActionList actions={binding?.[ev] ?? []} onChange={(actions) => onChange({ ...binding, [ev]: actions })} />
-      <p className="faint" style={{ margin: 0, fontSize: 12 }}>
-        Runs top to bottom when you {verb} {what}. The bar briefly shows the first action's name.
-      </p>
+      <GestureEditor key={ev} when={`${verb} ${what}`} gesture={binding?.[ev]} onChange={(g) => onChange({ ...binding, [ev]: g })} />
     </div>
   );
 }

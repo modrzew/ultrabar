@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import {
   ACT, APP_TYPE, api, errorMessage, firmwareBefore, on,
-  type AppInfo, type BarStatus, type DiscordStatus, type PcActionEvent, type PushEnvelope, type StoreApp, type StorePlugin,
+  type AppInfo, type BarStatus, type DiscordStatus, type InstalledPack, type PcActionEvent, type PushEnvelope, type StoreApp, type StorePlugin,
 } from "./api";
 import type { Automation, Doc, ModuleEndpoint, ModulePlacement, ModuleSetup, Profile, Widget } from "./model";
 import { uid } from "./model";
@@ -106,6 +106,14 @@ export interface AppJob {
   at: number;
 }
 
+/** Shortcut packs installed on this computer. */
+export interface Packs {
+  list: InstalledPack[];
+  loaded: boolean;
+  /** Store id → what's happening to it. */
+  busy: Record<number, "installing" | "removing">;
+}
+
 interface Catalog {
   apps: BarApp[];
   devices: { id: string; name: string; deviceType: string }[];
@@ -137,6 +145,7 @@ interface State {
   connectOpen: boolean;
   market: Market;
   appJobs: Record<string, AppJob>;
+  packs: Packs;
   past: Doc[];
   future: Doc[];
 
@@ -164,6 +173,11 @@ interface State {
   checkAppUpdates(): Promise<void>;
   installApp(pkg: string, name: string): Promise<void>;
   uninstallApp(pkg: string, name: string): Promise<void>;
+  loadPacks(): Promise<void>;
+  /** Installs (or reloads, or updates) a shortcut pack; null when it failed
+   * (after a toast). */
+  installPack(p: StorePlugin): Promise<InstalledPack | null>;
+  uninstallPack(id: number): Promise<void>;
   runDeploy(): Promise<void>;
   showProfileOnBar(id: string): Promise<void>;
 
@@ -201,10 +215,30 @@ function defaultDoc(): Doc {
   };
 }
 
+/** Brings profiles saved by earlier versions up to date, in place. Module
+ * gestures used to be bare action lists; they become gestures with no
+ * switch or prompt set, which deploy exactly as before (shown, named after
+ * the first action). */
+export function upgradeProfiles(profiles: Profile[]): Profile[] {
+  for (const p of profiles) {
+    for (const m of p.modules ?? []) {
+      for (const b of Object.values(m.keys ?? {})) {
+        const raw = b as Record<string, unknown>;
+        for (const [e, g] of Object.entries(raw)) {
+          if (Array.isArray(g)) raw[e] = { actions: g };
+          else if (!g || typeof g !== "object" || !Array.isArray((g as { actions?: unknown }).actions)) delete raw[e];
+        }
+      }
+    }
+  }
+  return profiles;
+}
+
 function normalize(doc: Doc): Doc {
   const d = { ...defaultDoc(), ...doc };
   d.integrations = { ...defaultDoc().integrations, ...doc.integrations };
   if (!d.profiles.length) d.profiles = defaultDoc().profiles;
+  upgradeProfiles(d.profiles);
   if (!d.profiles.some((p) => p.isDefault)) d.profiles[0].isDefault = true;
   return d;
 }
@@ -218,8 +252,12 @@ export function findWidget(doc: Doc, wuid: string): { profile: Profile; widget: 
 }
 
 /** What deploy checks need to know about the connected bar and this computer. */
-export function deployContext(s: Pick<State, "status" | "info">): DeployContext {
-  return { legacyFirmware: firmwareBefore(s.status.bar?.ver, "1.0.9"), pcAgentEnabled: s.info?.pcAgentEnabled };
+export function deployContext(s: Pick<State, "status" | "info"> & { catalog?: Catalog }): DeployContext {
+  return {
+    legacyFirmware: firmwareBefore(s.status.bar?.ver, "1.0.9"),
+    pcAgentEnabled: s.info?.pcAgentEnabled,
+    barApps: s.catalog?.loaded ? s.catalog.apps.map((a) => a.application) : undefined,
+  };
 }
 
 export function isDirty(s: Pick<State, "doc" | "status">): boolean {
@@ -250,6 +288,7 @@ export const useApp = create<State>((set, get) => ({
   connectOpen: false,
   market: { apps: [], plugins: [], state: "idle", latest: {} },
   appJobs: {},
+  packs: { list: [], loaded: false, busy: {} },
   past: [],
   future: [],
 
@@ -295,6 +334,7 @@ export const useApp = create<State>((set, get) => ({
       void get().loadModuleState();
     }
     void get().refreshDiscord();
+    void get().loadPacks();
   },
 
   update(mutate, coalesce, silent) {
@@ -484,6 +524,42 @@ export const useApp = create<State>((set, get) => ({
     } finally {
       setJob(pkg, null);
       void get().loadCatalog();
+    }
+  },
+
+  async loadPacks() {
+    const list = await api.installedPacks().catch(() => null);
+    set({ packs: { ...get().packs, list: list ?? get().packs.list, loaded: true } });
+  },
+
+  async installPack(p) {
+    if (get().packs.busy[p.id]) return null;
+    setPackBusy(p.id, "installing");
+    try {
+      const installed = await api.installPack(p);
+      const list = [...get().packs.list.filter((x) => x.plugin.id !== p.id), installed]
+        .sort((a, b) => a.plugin.name.localeCompare(b.plugin.name, undefined, { sensitivity: "base" }) || a.plugin.id - b.plugin.id);
+      set({ packs: { ...get().packs, list } });
+      return installed;
+    } catch (e) {
+      get().toast({ kind: "error", title: `Couldn't install ${p.name}`, body: errorMessage(e) });
+      return null;
+    } finally {
+      setPackBusy(p.id, null);
+    }
+  },
+
+  async uninstallPack(id) {
+    const pack = get().packs.list.find((x) => x.plugin.id === id);
+    setPackBusy(id, "removing");
+    try {
+      await api.uninstallPack(id);
+      set({ packs: { ...get().packs, list: get().packs.list.filter((x) => x.plugin.id !== id) } });
+      get().toast({ kind: "success", title: `Uninstalled ${pack?.plugin.name ?? "the pack"}`, body: "Cards you made from it stay as they are." });
+    } catch (e) {
+      get().toast({ kind: "error", title: "Couldn't uninstall the pack", body: errorMessage(e) });
+    } finally {
+      setPackBusy(id, null);
     }
   },
 
@@ -714,6 +790,13 @@ export const useApp = create<State>((set, get) => ({
     return a.id;
   },
 }));
+
+function setPackBusy(id: number, what: Packs["busy"][number] | null) {
+  const busy = { ...useApp.getState().packs.busy };
+  if (what) busy[id] = what;
+  else delete busy[id];
+  useApp.setState({ packs: { ...useApp.getState().packs, busy } });
+}
 
 function setJob(pkg: string, job: Omit<AppJob, "at"> | null) {
   const jobs = { ...useApp.getState().appJobs };

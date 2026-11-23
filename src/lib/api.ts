@@ -124,6 +124,15 @@ export interface Pack {
   buttons: { name: string; spanSize: number; icon?: string | null; param: unknown }[];
 }
 
+/** A shortcut pack installed on this computer (kept in the app's data
+ * folder, not in the layout). */
+export interface InstalledPack {
+  /** The store record it was installed from. */
+  plugin: StorePlugin;
+  pack: Pack;
+  installedAt: number;
+}
+
 /** A filter value in the cloud icon library. */
 export interface IconTag {
   id: number;
@@ -211,7 +220,11 @@ export const api = {
   storePlugins: (keyword?: string) => call<StorePlugin[]>("store_plugins", { keyword: keyword?.trim() || null }),
   /** The store's latest version of an app (`fetchLastVerV3`), null when it isn't in the store. */
   storeAppLatest: (pkg: string) => call<StoreApp | null>("store_app_latest", { package: pkg }),
-  storePluginPack: (p: StorePlugin) => call<Pack>("store_plugin_pack", { file: p.file, sha256: p.sha256, icon: p.icon ?? null }),
+  installedPacks: () => call<InstalledPack[]>("installed_packs"),
+  /** Downloads a pack (checked against the store's hash) and keeps it; also
+   * reloads or updates an installed one. */
+  installPack: (plugin: StorePlugin) => call<InstalledPack>("install_pack", { plugin }),
+  uninstallPack: (id: number) => call<void>("uninstall_pack", { id }),
 };
 
 export async function on<T>(event: string, cb: (payload: T) => void): Promise<UnlistenFn> {
@@ -258,6 +271,12 @@ export const ACT = {
   appManager: 30600,
   /** Install progress, sent under the 30600 request's id. */
   appManagerEvent: 30601,
+  /** `"<packageName>"` → the actions an app on the bar offers. */
+  appActions: 30750,
+  /** `{actionId, packageName}` → that action's params. */
+  appActionParams: 30751,
+  /** `{actionId, packageName, describeId, cursor, limit, params}` → one page of a param's options. */
+  appParamOptions: 30752,
   triggerCatalog: 30700,
   profileList: 30710,
 } as const;

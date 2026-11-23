@@ -568,3 +568,30 @@ button.problem:hover { background: rgba(242, 184, 75, 0.13); }
 .progress > .indeterminate { width: 30%; animation: progress-slide 1.1s ease-in-out infinite; }
 @keyframes progress-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 .update-error { margin: 0; padding: 8px 10px; border-radius: var(--r-sm); background: var(--danger-soft); color: var(--danger); font-size: 12px; }
+
+/* Installed shortcut packs in the card list */
+.lib-pack-head { display: flex; align-items: center; gap: 4px; margin: 0 0 4px; min-height: 24px; }
+.lib-pack-head .fold { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1; padding: 2px; border: 0; background: none; color: var(--text-3); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-align: left; }
+.lib-pack-head .fold:hover { color: var(--text-2); }
+.lib-pack-head .chip { height: 16px; font-size: 10px; padding: 0 6px; }
+
+/* Gesture editor */
+.gesture-body.off { opacity: 0.55; }
+/* The bar draws the picture with 40 dp corners on a 200 dp box. */
+.prompt-preview { width: 96px; aspect-ratio: var(--ratio, 1); flex: none; border-radius: 20%; overflow: hidden; display: grid; place-items: center; background: #0e0f0f; box-shadow: 0 0 0 1px var(--border-strong) inset; font-size: 11px; }
+.prompt-preview img { width: 100%; height: 100%; object-fit: fill; }
+.key-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 6px; }
+.key-grid button { height: 40px; padding: 0 8px; border-radius: var(--r); background: var(--surface-3); border: 1px solid var(--border-strong); border-bottom-width: 2px; color: var(--text); font-size: 12px; font-weight: 500; }
+.key-grid button:hover { border-color: var(--accent); }
+.key-grid button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+
+/* A list of choices in a picker form (pack buttons, app actions) */
+.pick-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
+.pick-list > button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border-radius: var(--r); border: 1px solid var(--border); background: var(--surface); text-align: left; color: var(--text); }
+.pick-list > button:hover { background: var(--surface-2); }
+.pick-list > button[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.pick-list .ico { width: 26px; height: 26px; flex: none; border-radius: 7px; display: grid; place-items: center; background: var(--surface-3); color: var(--text-2); }
+.pick-list .ico img { width: 18px; height: 18px; object-fit: contain; }
+.pick-list .txt { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.pick-list .txt b { font-weight: 550; font-size: 12.5px; }
+.pick-list .txt span { font-size: 11.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

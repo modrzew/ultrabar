@@ -3,17 +3,19 @@ import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } f
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  AlertTriangle, AppWindow, ChevronDown, ChevronRight, Command, Folder, GripVertical, Hourglass, LayoutGrid, Plus,
+  AlertTriangle, AppWindow, Blocks, ChevronDown, ChevronRight, Command, Folder, GripVertical, Hourglass, LayoutGrid, Package, Plus,
   RefreshCw, SunMedium, Timer, Volume2, Waves, X, Zap,
 } from "lucide-react";
 import { ACT, api } from "../lib/api";
 import { useApp, type Component, type TreeNode } from "../lib/store";
-import type { Action, PcControl } from "../lib/model";
+import type { Action, AppCapability, PcControl } from "../lib/model";
 import { uid } from "../lib/model";
-import { pcIsComplete, pcMeta, pcSummary } from "../lib/widgets";
+import { PC_ACTIONS, pcIsComplete, pcMeta, pcSummary } from "../lib/widgets";
+import { buttonName, usableButtons } from "../lib/market";
 import { tr } from "../lib/i18n";
 import { Button, Field, Modal, Slider, Spinner } from "./ui";
 import { PcControlEditor } from "./editors/PcControlEditor";
+import { AppCapabilityForm, capabilityComplete, capabilitySummary, type CapParam } from "./AppCapabilityForm";
 
 const TIMER_COMMANDS = [
   { label: "Start", value: "START" }, { label: "Pause", value: "PAUSE" }, { label: "Resume", value: "RESUM" },
@@ -30,12 +32,18 @@ const TIMER_NODE: TreeNode = {
   ],
 };
 
+/** The bar lists this at the root of its action tree (firmware 1.0.9) with
+ * nothing behind it. Like the official app, it picks a button of an
+ * installed shortcut pack and becomes a plain computer action. */
+const PACK_NODE: TreeNode = { id: "1", last: true, name: "Plugin", type: "PLUGIN_WIDGET", objectName: "Corebar" };
+
 // Used when the bar is offline, so actions can still be edited. Mirrors the
 // bar's own catalog (act 1205) for firmware 1.0.9.
 const OFFLINE_ROOT: TreeNode[] = [
   { id: "sc.delay", last: true, name: "Delay", type: "DELAY", components: [{ id: "1", uiType: "INPUT", inputType: "INT", min: 1, max: 300, unit: "second" }] },
   { id: "profile", last: true, name: "Switch Profile", type: "CHANGE_PROFILE", objectName: "Corebar", components: [{ id: "1", uiType: "SELECT", inputType: "STR", options: [] }] },
   { id: "1", last: true, name: "PC Control", type: "PC_CONTROL", objectName: "Corebar" },
+  PACK_NODE,
   { id: "sc.corebar", last: false, name: "CoreBar" },
   { id: "sc.other", last: false, name: "Other" },
 ];
@@ -56,21 +64,23 @@ const OFFLINE_CHILDREN: Record<string, TreeNode[]> = {
   ],
 };
 
-/** Actions this app can't set up: "Plugin" has no action behind it on 1.0.9,
- * and app capabilities need a parameter flow (acts 30750–30752) not built yet. */
-const HIDDEN_TYPES = new Set(["PLUGIN_WIDGET", "APP_CAPABILITY"]);
-
 /** Tidies a level of the bar's action tree. Firmware 1.0.9 also lists a bare
  * volume slider at the root (no name or type), which isn't an action. */
 function cleanNodes(id: string, nodes: TreeNode[]): TreeNode[] {
-  const out = nodes.filter((n) => (n.name || n.type) && !HIDDEN_TYPES.has(n.type ?? ""));
+  const out = nodes.filter((n) => n.name || n.type);
   if (id === "sc.other" && !out.some((n) => n.type === "TIMER")) out.push(TIMER_NODE);
+  // Pack buttons are plain computer actions, so they work on any firmware.
+  if (id === "" && !out.some((n) => n.type === "PLUGIN_WIDGET")) {
+    const pc = out.findIndex((n) => n.type === "PC_CONTROL");
+    out.splice(pc < 0 ? out.length : pc + 1, 0, PACK_NODE);
+  }
   return out;
 }
 
 const NAME: Record<string, string> = {
   DELAY: "Wait", CHANGE_PROFILE: "Switch profile", PC_CONTROL: "Computer action", BRIGHT: "Screen brightness", VOLUME: "Bar volume",
-  ACTIVITY: "Open app on the bar", SOUND_SCAPE: "Play soundscape", TIMER: "Control a timer",
+  ACTIVITY: "Open app on the bar", SOUND_SCAPE: "Play soundscape", TIMER: "Control a timer", PLUGIN_WIDGET: "Shortcut pack button",
+  APP_CAPABILITY: "App action",
 };
 const BRANCH_NAME: Record<string, string> = { "sc.corebar": "Bar", "sc.devices": "Devices", scene: "Scenes", "sc.other": "Other" };
 
@@ -82,6 +92,7 @@ export function actionIcon(a: { type?: string; pc?: PcControl }, size = 14): Rea
   const map: Record<string, ReactNode> = {
     DELAY: <Hourglass size={size} />, CHANGE_PROFILE: <LayoutGrid size={size} />, BRIGHT: <SunMedium size={size} />, VOLUME: <Volume2 size={size} />,
     ACTIVITY: <AppWindow size={size} />, SOUND_SCAPE: <Waves size={size} />, TIMER: <Timer size={size} />,
+    PLUGIN_WIDGET: <Package size={size} />, APP_CAPABILITY: <Blocks size={size} />,
   };
   return map[a.type ?? ""] ?? <Zap size={size} />;
 }
@@ -172,6 +183,10 @@ export function ActionPicker({ initial, onClose, onSave }: { initial?: Action; o
   const [node, setNode] = useState<TreeNode | null>(null);
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [pc, setPc] = useState<PcControl>(initial?.pc ?? { action: "startApp" });
+  /** PLUGIN_WIDGET: the picked pack button. */
+  const [packButton, setPackButton] = useState<PackPick | null>(null);
+  /** APP_CAPABILITY: the picked app action and its params. */
+  const [cap, setCap] = useState<{ value: AppCapability | null; params: CapParam[] }>({ value: initial?.capability ?? null, params: [] });
 
   useEffect(() => {
     void tree.load("");
@@ -208,7 +223,11 @@ export function ActionPicker({ initial, onClose, onSave }: { initial?: Action; o
 
   const comps = node?.components ?? [];
   const missing = node && node.type !== "PC_CONTROL" ? comps.filter((c) => values[c.id] === undefined || values[c.id] === "").map((c) => c.id) : [];
-  const valid = !!node && (node.type === "PC_CONTROL" ? pcIsComplete(pc) : missing.length === 0);
+  const valid = !!node && (
+    node.type === "PC_CONTROL" ? pcIsComplete(pc)
+      : node.type === "PLUGIN_WIDGET" ? !!packButton
+        : node.type === "APP_CAPABILITY" ? capabilityComplete(cap.value, cap.params)
+          : missing.length === 0);
 
   const save = () => {
     if (!node) return;
@@ -217,6 +236,14 @@ export function ActionPicker({ initial, onClose, onSave }: { initial?: Action; o
       const meta = pcMeta(pc);
       const detail = pcSummary(pc);
       onSave({ ...base, values: [], pc, summary: detail === meta.label ? (pc.action === "discord" ? `Discord: ${detail}` : detail) : `${meta.label}: ${detail}` });
+    } else if (node.type === "APP_CAPABILITY" && cap.value) {
+      onSave({ ...base, values: [], capability: cap.value, summary: capabilitySummary(cap.value) });
+    } else if (node.type === "PLUGIN_WIDGET" && packButton) {
+      // The official app's deployData: a PC_CONTROL action with the button's param.
+      onSave({
+        uid: base.uid, nodeId: "1", type: "PC_CONTROL", name: "PC Control", objectName: "Corebar", values: [],
+        pc: packButton.pc, summary: `${packButton.pack}: ${packButton.name}`,
+      });
     } else {
       const vals = comps.map((c) => ({ id: c.id, value: coerce(c, values[c.id]) }));
       onSave({ ...base, values: vals, summary: summarize(node, values) });
@@ -276,6 +303,10 @@ export function ActionPicker({ initial, onClose, onSave }: { initial?: Action; o
               </div>
               {node.type === "PC_CONTROL" ? (
                 <PcControlEditor value={pc} onChange={setPc} />
+              ) : node.type === "PLUGIN_WIDGET" ? (
+                <PackButtonPicker value={packButton} onChange={setPackButton} />
+              ) : node.type === "APP_CAPABILITY" ? (
+                <AppCapabilityForm node={node} value={cap.value} onChange={(value, params) => setCap({ value, params })} />
               ) : comps.length === 0 ? (
                 <p className="muted" style={{ margin: 0 }}>Nothing to set up.</p>
               ) : (
@@ -288,6 +319,55 @@ export function ActionPicker({ initial, onClose, onSave }: { initial?: Action; o
         </div>
       </div>
     </Modal>
+  );
+}
+
+interface PackPick {
+  packId: number;
+  index: number;
+  pack: string;
+  name: string;
+  pc: PcControl;
+}
+
+/** A button of an installed shortcut pack, picked as an action. */
+function PackButtonPicker({ value, onChange }: { value: PackPick | null; onChange: (p: PackPick) => void }) {
+  const packs = useApp((s) => s.packs.list);
+  const [packId, setPackId] = useState<number | null>(value?.packId ?? packs[0]?.plugin.id ?? null);
+  const pack = packs.find((p) => p.plugin.id === packId);
+  if (!packs.length) {
+    return (
+      <p className="muted" style={{ margin: 0 }}>
+        No shortcut packs are installed. Install one from “Browse shortcut packs” in the card list, then come back.
+      </p>
+    );
+  }
+  const buttons = pack ? usableButtons(pack.pack) : [];
+  return (
+    <>
+      <Field label="Pack">
+        <select className="select" value={packId ?? ""} onChange={(e) => setPackId(Number(e.target.value))}>
+          {packs.map((p) => <option key={p.plugin.id} value={p.plugin.id}>{p.plugin.name}</option>)}
+        </select>
+      </Field>
+      <Field label="Button" hint="Becomes a computer action you can change afterwards. Packs can only add shortcuts, text and web links.">
+        {!buttons.length ? <div className="lib-note">This pack has no buttons this app can use.</div> : (
+          <div className="pick-list" role="listbox" aria-label="Button">
+            {buttons.map(({ b, pc, index }) => {
+              const Icon = PC_ACTIONS[pc.action].icon;
+              const selected = value?.packId === pack!.plugin.id && value.index === index;
+              return (
+                <button key={index} type="button" role="option" aria-selected={selected}
+                  onClick={() => onChange({ packId: pack!.plugin.id, index, pack: pack!.plugin.name, name: buttonName(b, pc), pc })}>
+                  <span className="ico">{b.icon ? <img src={b.icon} alt="" /> : <Icon size={14} />}</span>
+                  <span className="txt"><b className="truncate">{buttonName(b, pc)}</b><span>{PC_ACTIONS[pc.action].verb} {pcSummary(pc)}</span></span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </Field>
+    </>
   );
 }
 

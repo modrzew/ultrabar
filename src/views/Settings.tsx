@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
 import { CheckCircle2, Download, Laptop, ShieldCheck, Upload, XCircle } from "lucide-react";
-import { useApp } from "../lib/store";
+import { upgradeProfiles, useApp } from "../lib/store";
 import { api, errorMessage, isTauri } from "../lib/api";
 import type { Doc } from "../lib/model";
 import { Button, ToggleRow } from "../components/ui";
@@ -72,7 +72,7 @@ export function SettingsView() {
       const doc = await invoke<Doc>("read_json_file", { path });
       if (!doc || !Array.isArray(doc.profiles)) throw new Error("That file isn't an UltraBar layout.");
       s.update((d) => {
-        d.profiles = doc.profiles;
+        d.profiles = upgradeProfiles(doc.profiles);
         d.automations = doc.automations ?? [];
         d.integrations = { ...d.integrations, ...doc.integrations };
         d.modules = doc.modules ?? [];

@@ -1,5 +1,5 @@
 // Turns the layout document into the messages the bar expects.
-import type { Action, Doc, KeyBinding, KeyEvent, ModuleSetup, Profile, Widget } from "./model";
+import type { Action, Doc, Gesture, KeyBinding, KeyEvent, ModuleSetup, Profile, Widget } from "./model";
 import { hms, isSystemCard, pcIsComplete, pcParam, pcPayload } from "./widgets";
 import { zoneOffset } from "./timezones";
 
@@ -76,6 +76,8 @@ export interface DeployContext {
   legacyFirmware?: boolean;
   /** "Let the bar control this computer" is on (system cards need it). */
   pcAgentEnabled?: boolean;
+  /** Package names of the apps on the bar, when known. */
+  barApps?: string[];
 }
 
 /** `buttonIcons[i]` is the icon URL of shortcut-group button `i`. */
@@ -146,9 +148,21 @@ export function actionPayload(a: Action): Record<string, unknown> {
   if (a.type === "PC_CONTROL" && a.pc) {
     return { id: a.nodeId, name: a.name, type: "PC_CONTROL", values: [{ id: "1", value: pcParam(a.pc) }] };
   }
+  if (a.type === "APP_CAPABILITY" && a.capability) {
+    return { id: a.nodeId, name: a.name, type: a.type, values: [{ id: "1", value: capabilityValue(a.capability) }] };
+  }
   const p: Record<string, unknown> = { id: a.nodeId, name: a.name, type: a.type, values: a.values };
   if (a.objectParams !== undefined && a.objectParams !== null) p.objectParams = a.objectParams;
   return p;
+}
+
+/** An app action's value: `{actionId, packageName, params}` as a JSON
+ * *string*. Launcher 1.0.9's AppCapabilityAction reads value "1" as a string
+ * and parses it (an object fails there). Written like the official app's:
+ * compact, keys sorted, params as strings. */
+export function capabilityValue(c: NonNullable<Action["capability"]>): string {
+  const params = Object.fromEntries(Object.entries(c.params).filter(([, v]) => v !== "").sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+  return JSON.stringify({ actionId: c.actionId, packageName: c.packageName, params });
 }
 
 /** The address the bar's Home Assistant app connects to. It appends
@@ -171,43 +185,89 @@ export const KEY_EVENTS: { key: KeyEvent; field: string; label: string }[] = [
   { key: "long", field: "longPress", label: "Long press" },
 ];
 
-function hasActions(b: KeyBinding | undefined) {
-  return !!b && KEY_EVENTS.some((e) => b[e.key]?.length);
+/** A gesture that does something: switched on, with at least one action.
+ * Others aren't sent (the official app leaves out switched-off ones too). */
+export function gestureRuns(g: Gesture | undefined): g is Gesture {
+  return !!g && g.enabled !== false && g.actions.length > 0;
 }
 
-/** `KeyCodeConfig`: a key code and a scene per gesture. The bar shows the
- * scene's name when it runs, so it's named after its first action. */
-function keyPayload(code: string, b: KeyBinding): Record<string, unknown> {
+/** Whether any gesture of a key does something. */
+export function keyRuns(b: KeyBinding | undefined) {
+  return !!b && KEY_EVENTS.some((e) => gestureRuns(b[e.key]));
+}
+
+/** Longest prompt text, as in the official app. The bar shows it on one
+ * line and cuts it off with "…" where it doesn't fit. */
+export const PROMPT_MAX = 64;
+
+/** The prompt's text: what the user typed, or the first action's name (cut
+ * at 40 characters, as earlier versions sent it). The official app uses
+ * "<key>-<gesture>" ("Button1-Click") until text is typed. */
+export function gestureName(g: Gesture): string {
+  const text = g.prompt?.text?.trim();
+  if (text) return text.slice(0, PROMPT_MAX);
+  const a = g.actions[0];
+  return a ? (a.summary || a.name).slice(0, 40) : "";
+}
+
+/** Whether the bar shows the prompt; layouts from before the switch did. */
+export function promptShown(g: Gesture) {
+  return g.prompt?.show ?? true;
+}
+
+/** Maps a prompt's background image (PNG data URL) to its URL on the bar. */
+type ImageUrl = (png: string) => string | undefined;
+
+/** A gesture as the scene the bar runs: `{name, show, icon?, actions}`. With
+ * `show` the bar briefly shows the name over the image when it runs. */
+function gesturePayload(g: Gesture, imageUrl?: ImageUrl): Record<string, unknown> {
+  const out: Record<string, unknown> = { name: gestureName(g), show: promptShown(g) };
+  const icon = promptShown(g) && g.prompt?.image ? imageUrl?.(g.prompt.image) : undefined;
+  if (icon) out.icon = icon;
+  out.actions = g.actions.map(actionPayload);
+  return out;
+}
+
+/** `KeyCodeConfig`: a key code and a scene per gesture. */
+function keyPayload(code: string, b: KeyBinding, imageUrl?: ImageUrl): Record<string, unknown> {
   const out: Record<string, unknown> = { keyCode: Number(code) };
   for (const e of KEY_EVENTS) {
-    const actions = b[e.key];
-    if (!actions?.length) continue;
-    out[e.field] = { name: (actions[0].summary || actions[0].name).slice(0, 40), show: true, actions: actions.map(actionPayload) };
+    const g = b[e.key];
+    if (gestureRuns(g)) out[e.field] = gesturePayload(g, imageUrl);
   }
   return out;
 }
 
-/** A profile's `module` list: what each module's keys (and a knob's turns) do. */
-export function modulesPayload(p: Profile): Record<string, unknown>[] {
+/** Every gesture of a module that runs. */
+export function moduleGestures(m: ModuleSetup): Gesture[] {
+  return Object.values(m.keys ?? {}).flatMap((b) => KEY_EVENTS.map((e) => b[e.key]).filter(gestureRuns));
+}
+
+/** A profile's `module` list: what each module's keys (and a knob's turns)
+ * do. `imageUrl` gives prompt images their URL on the bar (see buildPlan);
+ * without it they're left out. */
+export function modulesPayload(p: Profile, imageUrl?: ImageUrl): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   for (const m of p.modules ?? []) {
-    const keys = Object.entries(m.keys ?? {}).filter(([, b]) => hasActions(b));
+    const keys = Object.entries(m.keys ?? {}).filter(([, b]) => keyRuns(b));
     if (m.productId === "KNOB_KEY") {
       const config: Record<string, unknown> = {};
       const button = keys.find(([code]) => code === "0");
-      if (button) config.button = keyPayload("0", button[1]);
+      if (button) config.button = keyPayload("0", button[1], imageUrl);
       if (m.knob?.right) config.clockwise = { id: m.knob.right.id, type: m.knob.right.type };
       if (m.knob?.left) config.counterclockwise = { id: m.knob.left.id, type: m.knob.left.type };
       if (Object.keys(config).length) out.push({ productId: m.productId, serialNo: m.serialNumber, config });
     } else if (keys.length) {
-      out.push({ productId: m.productId, serialNo: m.serialNumber, config: keys.map(([code, b]) => keyPayload(code, b)) });
+      out.push({ productId: m.productId, serialNo: m.serialNumber, config: keys.map(([code, b]) => keyPayload(code, b, imageUrl)) });
     }
   }
   return out;
 }
 
+/** Actions of the gestures that run (switched-off ones are skipped by
+ * deploy checks and kept out of the computer's allowlist). */
 export function moduleActions(m: ModuleSetup): Action[] {
-  return Object.values(m.keys ?? {}).flatMap((b) => KEY_EVENTS.flatMap((e) => b[e.key] ?? []));
+  return moduleGestures(m).flatMap((g) => g.actions);
 }
 
 export interface Problem {
@@ -223,6 +283,15 @@ export interface Problem {
 export function findProblems(doc: Doc, triggerTypes?: string[], ctx: DeployContext = {}): Problem[] {
   const out: Problem[] = [];
   let systemCards = false;
+  const checkActions = (actions: Action[], where: string, at: Partial<Problem> = {}) => {
+    for (const a of actions) {
+      if (a.type === "PC_CONTROL" && !pcIsComplete(a.pc)) out.push({ where, message: `“${a.summary}” isn't set up yet`, ...at });
+      const app = a.type === "APP_CAPABILITY" ? a.capability : undefined;
+      if (app && ctx.barApps && !ctx.barApps.includes(app.packageName)) {
+        out.push({ where, message: `“${a.summary}” needs ${app.appName}, which isn't on the bar, so it does nothing. Install it in Apps`, ...at });
+      }
+    }
+  };
   for (const p of doc.profiles) {
     for (const w of p.widgets) {
       const where = `${p.name} › ${w.name}`;
@@ -235,19 +304,13 @@ export function findProblems(doc: Doc, triggerTypes?: string[], ctx: DeployConte
       if (w.type === "SCENE" && !w.actions?.length) out.push({ where, message: "Has no actions", ...at });
       if (w.type === "HOT_KEY_GROUP" && !w.group?.buttons.length) out.push({ where, message: "Has no buttons", ...at });
       if (w.type === "WEATHER" && halfLocation(w)) out.push({ where, message: "Has only a latitude or only a longitude. Fill in both, or clear both to use the bar's network location", ...at });
-      if (w.type === "SCENE") {
-        for (const a of w.actions ?? []) {
-          if (a.type === "PC_CONTROL" && !pcIsComplete(a.pc)) out.push({ where, message: `“${a.summary}” isn't set up yet`, ...at });
-        }
-      }
+      if (w.type === "SCENE") checkActions(w.actions ?? [], where, at);
     }
   }
   for (const p of doc.profiles) {
     for (const m of p.modules ?? []) {
       const name = doc.modules.find((x) => x.serialNumber === m.serialNumber)?.name ?? "Module";
-      for (const a of moduleActions(m)) {
-        if (a.type === "PC_CONTROL" && !pcIsComplete(a.pc)) out.push({ where: `${p.name} › ${name}`, message: `“${a.summary}” isn't set up yet`, profileId: p.id });
-      }
+      checkActions(moduleActions(m), `${p.name} › ${name}`, { profileId: p.id });
     }
   }
   if (systemCards && ctx.pcAgentEnabled === false) {
@@ -259,6 +322,7 @@ export function findProblems(doc: Doc, triggerTypes?: string[], ctx: DeployConte
   for (const a of doc.automations) {
     if (a.enabled && !a.triggers.length) out.push({ where: `Automation “${a.name}”`, message: "Has no trigger" });
     if (a.enabled && !a.actions.length) out.push({ where: `Automation “${a.name}”`, message: "Has no actions" });
+    if (a.enabled) checkActions(a.actions, `Automation “${a.name}”`);
     if (a.enabled && triggerTypes?.length && a.triggers.some((t) => !triggerTypes.includes(t.type))) {
       out.push({ where: `Automation “${a.name}”`, message: "Uses a trigger your bar no longer offers, so it won't run" });
     }
@@ -277,7 +341,7 @@ export interface Plan {
 /** `iconUrl` serves a card's icon; `cardArtUrl` the full card face of
  * computer-action, multi-action, shortcut-group and Home Assistant scene
  * cards (see `hasCardArt`); `pngUrl` any other image (shortcut-group
- * buttons, profile pictures). */
+ * buttons, profile pictures, gesture prompts). */
 export async function buildPlan(
   doc: Doc,
   iconUrl: (w: Widget) => Promise<string | undefined>,
@@ -317,6 +381,14 @@ export async function buildPlan(
         });
       }
     }
+    // Prompt images go to the bar like card images.
+    const promptImages = new Map<string, string>();
+    for (const m of p.modules ?? []) {
+      for (const g of moduleGestures(m)) {
+        const png = promptShown(g) ? g.prompt?.image : undefined;
+        if (png && !promptImages.has(png)) promptImages.set(png, await pngUrl(png));
+      }
+    }
     for (const m of p.modules ?? []) {
       moduleActions(m).forEach((a) => allowPc(a.pc));
       // Lets the knob change this computer's volume or brightness (see pc_agent.rs).
@@ -328,7 +400,7 @@ export async function buildPlan(
     // The bar shows the profile's icon in its profile switcher, center-cropped.
     profiles.push({
       id: p.id, name: p.name, icon: p.image ? await pngUrl(p.image) : "", iconScale: 60, isDefault: p.isDefault, default: p.isDefault,
-      showName: p.showName, module: modulesPayload(p), widget: widgets,
+      showName: p.showName, module: modulesPayload(p, (png) => promptImages.get(png)), widget: widgets,
     });
   }
 
@@ -378,7 +450,7 @@ export function fitsOneLine(act: number, data: unknown) {
 /** Stable fingerprint of everything Deploy sends, to show unsent changes. */
 export function docHash(doc: Doc): string {
   // Key order isn't stable across a save/load round trip, so sort it.
-  const s = stableStringify([doc.profiles, doc.automations, doc.integrations, doc.modulesManaged ? doc.modules : null]);
+  const s = stableStringify([doc.profiles.map(hashShape), doc.automations, doc.integrations, doc.modulesManaged ? doc.modules : null]);
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
   for (let i = 0; i < s.length; i++) {
     const ch = s.charCodeAt(i);
@@ -388,6 +460,16 @@ export function docHash(doc: Doc): string {
   h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+/** Gestures without a switch or prompt setting hash as the bare action lists
+ * earlier versions stored, so upgrading doesn't flag a deployed layout as
+ * changed (they deploy the same). */
+function hashShape(p: Profile): unknown {
+  if (!p.modules?.length) return p;
+  const keys = (b: KeyBinding) =>
+    Object.fromEntries(Object.entries(b).map(([e, g]) => [e, g && g.enabled === undefined && g.prompt === undefined ? g.actions : g]));
+  return { ...p, modules: p.modules.map((m) => ({ ...m, keys: Object.fromEntries(Object.entries(m.keys ?? {}).map(([c, b]) => [c, keys(b)])) })) };
 }
 
 function stableStringify(v: unknown): string {

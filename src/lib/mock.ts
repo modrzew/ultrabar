@@ -59,6 +59,11 @@ const tree: Record<string, unknown[]> = {
       ] }],
       id: "sound", last: true, name: "Soundscape", objectName: "Soundscape", type: "SOUND_SCAPE",
     },
+    // Listed when an app with a capability service is running (launcher 1.0.9).
+    {
+      parentId: "sc.other", id: "capability", name: "App Capability", objectName: "App Capability", type: "APP_CAPABILITY", last: true,
+      components: [{ id: "1", name: "App", uiType: "SELECT", inputType: "STR", unit: "", options: [{ label: "Notes", value: "com.ultrabar.notes" }] }],
+    },
   ],
   "sc.devices": [
     { id: "sc.devices.sw", last: false, name: "Switch" },
@@ -103,6 +108,7 @@ const triggers = {
 
 let apps = [
   { application: "com.ultrabar.calculator", appName: "Calculator", icon: "", versionName: "1.0.1", versionCode: 1, systemApp: true, allowProfile: true, config: false },
+  { application: "com.ultrabar.notes", appName: "Notes", icon: "", versionName: "1.0.2", versionCode: 2, systemApp: false, allowProfile: true, config: false },
   { application: "com.ultrabar.homeassistant", appName: "Home Assistant", icon: "", versionName: "0.9", versionCode: 3, systemApp: false, allowProfile: false, config: true, port: 9000, sessionToken: "demo" },
 ];
 
@@ -130,6 +136,15 @@ const packs: Record<string, unknown> = {
     { name: "Run something", spanSize: 1, icon: null, param: { output: 10, payload: { action: "execCmd", params: { cmd: "echo hi" } } } },
   ] },
 };
+
+type MockInstalled = { plugin: { id: number; name?: string }; pack: unknown; installedAt: number };
+function installedPacks(): MockInstalled[] {
+  const list = JSON.parse(localStorage.getItem("mock.packs") ?? "[]") as MockInstalled[];
+  return list.sort((a, b) => String(a.plugin.name).localeCompare(String(b.plugin.name)));
+}
+function saveInstalledPacks(list: MockInstalled[]) {
+  localStorage.setItem("mock.packs", JSON.stringify(list));
+}
 
 // The cloud icon library: the real filters, and generated icons (the CDN's
 // images can't be drawn into card art from a plain browser).
@@ -167,6 +182,38 @@ function matches(keyword: unknown, ...fields: (string | null | undefined)[]) {
   return !k || fields.some((f) => f?.toLowerCase().includes(k));
 }
 
+// App Capability (acts 30750–30752), shaped like launcher 1.0.9's replies.
+// The made-up Notes app has two actions; folders page through 30752, and a
+// note list depends on the folder.
+const capActions: Record<string, unknown[]> = {
+  "com.ultrabar.notes": [
+    { actionId: "note.create", name: "New note", description: "Add a note to a folder", features: 1 },
+    { actionId: "note.open", name: "Open note", description: "Show a note on the bar", features: 1 },
+  ],
+};
+const folderParam = { id: "folder", name: "Folder", type: "SELECT", required: true, options: { provider: "REMOTE", items: [], searchable: false }, dependsOn: [] };
+const capParams: Record<string, unknown[]> = {
+  "note.create": [
+    folderParam,
+    { id: "title", name: "Title", type: "TEXT", placeholder: "Groceries", required: true, maxLength: 60, dependsOn: [] },
+    { id: "color", name: "Color", type: "SELECT", required: false, options: { provider: "STATIC", items: [{ label: "Yellow", value: "yellow" }, { label: "Blue", value: "blue" }] }, dependsOn: [] },
+  ],
+  "note.open": [
+    folderParam,
+    { id: "note", name: "Note", type: "SELECT", required: true, options: { provider: "REMOTE", items: [] }, dependsOn: ["folder"] },
+  ],
+};
+function capOptions(d: { describeId: string; cursor?: string; limit?: number; params?: Record<string, string> }) {
+  const all = d.describeId === "folder"
+    ? Array.from({ length: 45 }, (_, i) => ({ label: `Folder ${i + 1}`, value: `f${i + 1}` }))
+    : d.params?.folder ? Array.from({ length: 6 }, (_, i) => ({ label: `${d.params!.folder.toUpperCase()} note ${i + 1}`, value: `${d.params!.folder}-n${i + 1}` })) : [];
+  if (d.describeId === "note" && !d.params?.folder) return { success: false, error: { code: "MISSING_PARAM", message: "folder is required" } };
+  const from = Number(d.cursor || 0), n = d.limit ?? 10;
+  const items = all.slice(from, from + n);
+  const more = from + n < all.length;
+  return { success: true, items, nextCursor: more ? String(from + n) : null, hasMore: more };
+}
+
 /** Plays back the events a real bar sends while installing (act 30601). */
 function simulateInstall(pkg: string) {
   const ev = (type: string, result: unknown, at: number) =>
@@ -198,6 +245,13 @@ async function request(act: number, data: unknown): Promise<unknown> {
     }
     case 30730: return (data as string[]).map((serialNo) => ({ serialNo, online: serialNo === "DK01A2234" }));
     case 30700: return triggers;
+    case 30750: {
+      const list = capActions[data as string];
+      if (!list) throw { code: -1, message: `no active session for packageName=${data}` };
+      return list;
+    }
+    case 30751: return capParams[(data as { actionId: string }).actionId] ?? [];
+    case 30752: return capOptions(data as Parameters<typeof capOptions>[0]);
     case 30710: return [{ label: "Default Profile", value: "profile_2", last: true }];
     case 30721: return [{ label: "前台", value: "true", last: true }, { label: "后台", value: "false", last: true }];
     case 1103: case 1108: case 30500: case 30300: case 1010: return "ok";
@@ -257,7 +311,18 @@ export async function invoke(cmd: string, args: Record<string, unknown> = {}): P
     case "store_apps": await sleep(400); return storeApps.filter((a) => matches(args.keyword, a.appName, a.application, a.desc));
     case "store_plugins": await sleep(400); return storePlugins.filter((p) => matches(args.keyword, p.name, p.desc, p.author));
     case "store_app_latest": await sleep(250); return storeApps.find((a) => a.application === args.package) ?? null;
-    case "store_plugin_pack": await sleep(600); return packs[args.file as string];
+    // Installed packs live in the app's data folder; here, in localStorage.
+    case "installed_packs": return installedPacks();
+    case "install_pack": {
+      await sleep(700);
+      const plugin = args.plugin as { id: number; file: string };
+      const pack = packs[plugin.file];
+      if (!pack) throw new Error("The downloaded pack doesn't match the store's checksum, so it wasn't used.");
+      const entry = { plugin, pack, installedAt: Date.now() };
+      saveInstalledPacks([...installedPacks().filter((p) => p.plugin.id !== plugin.id), entry]);
+      return entry;
+    }
+    case "uninstall_pack": saveInstalledPacks(installedPacks().filter((p) => p.plugin.id !== args.id)); return;
     case "set_allowed_actions": case "set_pc_agent_enabled": case "test_pc_action": case "refresh_bar_screen": return;
     case "running_apps": await sleep(300); return [
       { name: "Safari", path: "/Applications/Safari.app" },

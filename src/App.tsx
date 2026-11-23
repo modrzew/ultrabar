@@ -146,7 +146,8 @@ function DeployConfirm({ onClose }: { onClose: () => void }) {
   const triggerTypes = useApp((s) => s.catalog.triggers).map((t) => t.type);
   const info = useApp((s) => s.info);
   const status = useApp((s) => s.status);
-  const problems = findProblems(doc, triggerTypes, deployContext({ info, status }));
+  const catalog = useApp((s) => s.catalog);
+  const problems = findProblems(doc, triggerTypes, deployContext({ info, status, catalog }));
   const first = !doc.deployedAt;
   return (
     <Modal

@@ -1,12 +1,9 @@
 // Add-on modules drawn next to the bar preview, where the user placed them.
 import type { CSSProperties } from "react";
-import type { KeyBinding, ModuleEndpoint, ModuleSetup } from "../lib/model";
+import type { ModuleEndpoint, ModuleSetup } from "../lib/model";
 import { DOT_KEYS, KNOB_BUTTON, PRODUCTS } from "../lib/modules";
+import { keyRuns } from "../lib/deploy";
 import { useApp } from "../lib/store";
-
-function hasActions(b: KeyBinding | undefined) {
-  return !!b && Object.values(b).some((a) => a?.length);
-}
 
 /** One module as a small device. `active` keys are tinted (they do something
  * in this profile); `selectedKey` is outlined; `onKey` makes keys clickable. */
@@ -18,7 +15,7 @@ export function ModuleDevice({ m, setup, selectedKey, onKey, size }: {
   size: string;
 }) {
   const keyClass = (code: string) =>
-    `mod-key${hasActions(setup?.keys?.[code]) ? " active" : ""}${selectedKey === code ? " selected" : ""}${onKey ? " click" : ""}`;
+    `mod-key${keyRuns(setup?.keys?.[code]) ? " active" : ""}${selectedKey === code ? " selected" : ""}${onKey ? " click" : ""}`;
   // Keys are buttons only when they can be picked (the tile itself is a button).
   const key = ({ code, style, title, children, extra = "" }: { code: string; style?: CSSProperties; title: string; children?: React.ReactNode; extra?: string }) =>
     onKey ? (

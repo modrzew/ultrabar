@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { AppWindow, FolderOpen, Info, Keyboard, ListChecks, Play, RefreshCw, RotateCcw } from "lucide-react";
+import { AppWindow, FolderOpen, Info, Keyboard, ListChecks, Music, Play, RefreshCw, RotateCcw } from "lucide-react";
 import type { DiscordAction, DiscordOp, LaunchMode, PcAction, PcControl } from "../../lib/model";
 import { DISCORD_OPS, DISCORD_ORDER, PC_ACTIONS, pcIsComplete, pcPayload } from "../../lib/widgets";
-import { hidFromCode, isMac, isModifier, isWindows, keyLabel, sortKeys } from "../../lib/hid";
+import { SPECIAL_GROUPS, SPECIAL_KEYS, hidFromCode, isMac, isModifier, isSpecialKey, isWindows, keyLabel, sortKeys, type SpecialGroup } from "../../lib/hid";
 import { api, errorMessage, isTauri, type DiscordGuild, type DiscordSound, type RunningApp } from "../../lib/api";
 import { useApp } from "../../lib/store";
 import { Button, Empty, Field, Modal, Segmented, Spinner } from "../ui";
@@ -38,7 +38,9 @@ export function PcControlEditor({ value, onChange }: { value: PcControl; onChang
       </Field>
 
       {value.action === "hotkey" && (
-        <Field label="Shortcut" hint="The bar types this as a USB keyboard, so it works when the bar is plugged into this computer.">
+        <Field label="Shortcut" hint={(value.keys ?? []).some(isSpecialKey)
+          ? SPECIAL_KEY_HINT
+          : "The bar types this as a USB keyboard, so it works when the bar is plugged into this computer."}>
           <HotkeyRecorder keys={value.keys ?? []} onChange={(keys) => onChange({ ...value, keys })} />
         </Field>
       )}
@@ -189,8 +191,14 @@ function SoundPicker({ value, onChange }: { value: DiscordAction; onChange: (d: 
   );
 }
 
+/** Shown under a media, browser, app or power key. The hub sends these on
+ * their own HID reports; bars whose base firmware predates August 2026 (the
+ * hub's cut-off) may not take those, which hasn't been tried on a bar. */
+const SPECIAL_KEY_HINT = "The bar sends this key on its own, as a USB keyboard, so it works when the bar is plugged into this computer. Bars with base firmware from before August 2026 may not send it.";
+
 function HotkeyRecorder({ keys, onChange }: { keys: number[]; onChange: (k: number[]) => void }) {
   const [recording, setRecording] = useState(false);
+  const [picking, setPicking] = useState(false);
   const held = useRef<Set<number>>(new Set());
   const combo = useRef<number[]>([]);
   const ref = useRef<HTMLButtonElement>(null);
@@ -245,7 +253,34 @@ function HotkeyRecorder({ keys, onChange }: { keys: number[]; onChange: (k: numb
       <Button icon onClick={recording ? () => setRecording(false) : start} title={recording ? "Stop" : "Record again"}>
         {recording ? <Keyboard size={14} /> : <RotateCcw size={14} />}
       </Button>
+      <Button icon onClick={() => { setRecording(false); setPicking(true); }} title="Media and system keys" aria-label="Media and system keys">
+        <Music size={14} />
+      </Button>
+      {picking && <SpecialKeyPicker value={keys} onClose={() => setPicking(false)} onPick={(k) => { onChange([k]); setPicking(false); }} />}
     </div>
+  );
+}
+
+/** On-screen picker for keys a keyboard usually doesn't have: media, power,
+ * app and browser keys. Picking one replaces the shortcut, because the bar
+ * can't send one together with other keys. */
+function SpecialKeyPicker({ value, onPick, onClose }: { value: number[]; onPick: (code: number) => void; onClose: () => void }) {
+  const current = value.find(isSpecialKey);
+  const [tab, setTab] = useState<SpecialGroup>(SPECIAL_KEYS.find((k) => k.code === current)?.group ?? "media");
+  return (
+    <Modal title="Media and system keys" icon={<Music size={16} className="faint" />} onClose={onClose}>
+      <div className="stack" style={{ gap: 12 }}>
+        <Segmented full value={tab} onChange={setTab} options={SPECIAL_GROUPS.map((g) => ({ value: g.key, label: g.label }))} />
+        <div className="key-grid">
+          {SPECIAL_KEYS.filter((k) => k.group === tab).map((k) => (
+            <button key={k.code} type="button" aria-pressed={k.code === current} onClick={() => onPick(k.code)}>{k.label}</button>
+          ))}
+        </div>
+        <p className="faint" style={{ margin: 0, fontSize: 12 }}>
+          {value.length && !current ? `Replaces ${value.map(keyLabel).join(isMac ? "" : "+")}. ` : ""}These keys can't be combined with others, so pick one on its own.
+        </p>
+      </div>
+    </Modal>
   );
 }
 

@@ -500,9 +500,9 @@ System cards poll the computer while they're on screen (`MetricsBus`, `Scheduled
 After `1108` the launcher no longer redraws the home screen, and `1103` is ignored when the requested profile is already current (also right after a launcher restart, when the current profile is the default one). A redeploy of the visible profile therefore leaves the old cards on screen. `POST :8080/upload/zip` is back (multipart `file` = a `.zip`, query `subDir`, `isFull`) and always triggers a full home-screen reload. **Always pass `subDir`**: `isFull` defaults to `true` and empties the target folder, which without `subDir` is the launcher's whole asset folder. This app uploads an empty zip to `subDir=ultrabar-app&isFull=false` after each deploy (reply `{"msg":"ok","data":0,"state":200}`).
 
 ## Action catalog (`1205`)
-- Root gains `PLUGIN_WIDGET` (no action behind it) and a stray `{"id":"corebar.volume", …}` slider with no name or type (a launcher bug).
+- Root gains `PLUGIN_WIDGET` (no action behind it; the desktop app's pack-button picker, see "Plugins") and a stray `{"id":"corebar.volume", …}` slider with no name or type (a launcher bug).
 - `sc.corebar` → `BRIGHT` (id now `corebar`, was `bright`) and new `VOLUME` (id `corebar`, value `corebar.volume`, 1–100).
-- `sc.other` → `ACTIVITY`, `SOUND_SCAPE` (only with the whitenoise app) and `APP_CAPABILITY` (only with plugin apps). **Timer is no longer listed** (the method exists but isn't called), yet `TimerAction` still runs: `{id:"timer", type:"TIMER", values:[{id:"1", value:<timer widget id>}, {id:"2", value:"START|PAUSE|RESUM|CANCEL|RESTART"}]}` works from multi-action cards and automations.
+- `sc.other` → `ACTIVITY`, `SOUND_SCAPE` (only with the whitenoise app) and `APP_CAPABILITY` (only while an app with actions runs; see "App Capability actions"). **Timer is no longer listed** (the method exists but isn't called), yet `TimerAction` still runs: `{id:"timer", type:"TIMER", values:[{id:"1", value:<timer widget id>}, {id:"2", value:"START|PAUSE|RESUM|CANCEL|RESTART"}]}` works from multi-action cards and automations.
 - `sc.devices` adds `sc.devices.vivo`, `sc.devices.pcboot`.
 - Actions still dispatch on `type` and component ids, so actions saved with the 1.0.1 node ids keep working.
 
@@ -552,7 +552,7 @@ Discovery now reports `ver: "1.0.9(9)"` (the hub was 1.0.1). The update cleared 
 
 ## Module keys (profile `module` list in `1108`) **[code]**
 Each profile's `module` array holds `{productId: "DOT_KEY"|"KNOB_KEY"|…, serialNo, config}` (product by name or number). The launcher matches `serialNo` against the stored gateway endpoints, so the module must already be in the bar's config.
-- **Dot Key**: `config` = `[{keyCode, singleClick?, doubleClick?, longPress?}]`. Each gesture is a scene: `{name, icon?, show, actions: [ActionConfig]}` (the same actions as multi-action cards). With `show: true` the bar briefly shows `name`/`icon` when it runs. The official app's drawing maps `button1` (top left, round) → key code **2**, `button2` (bottom left, round) → **1**, `button3` (right, tall) → **0**. Confirmed on the bar: all three keys and all three gestures arrive with these codes.
+- **Dot Key**: `config` = `[{keyCode, singleClick?, doubleClick?, longPress?}]`. Each gesture is a scene: `{name, icon?, show, actions: [ActionConfig]}` (the same actions as multi-action cards). With `show: true` the bar briefly shows `name`/`icon` when it runs (for 800 ms; see "Gesture prompt"). The official app's drawing maps `button1` (top left, round) → key code **2**, `button2` (bottom left, round) → **1**, `button3` (right, tall) → **0**. Confirmed on the bar: all three keys and all three gestures arrive with these codes.
 - **Knob**: `config` = `{button?: {keyCode: 0, singleClick?, …}, clockwise?: {id, type}, counterclockwise?: {id, type}}`. The first turn's direction picks `clockwise` or `counterclockwise`. Further turns either way adjust that target (right = up) until the knob rests for 3 s.
 - Confirmed on the bar: the Knob's press is key code 0 (click, double click, hold), and `counterclockwise: local:bright` changes the bar's brightness.
 - A module the bar has forgotten still shows up in a scan but stays `online: false` in `30730`. Sending `30300` with it (and every other module) brings it back, `online: true` within seconds.
@@ -607,9 +607,34 @@ Read from the official app's macOS build (x86_64 slice, symbols intact), and che
 - `30200` in general is `CoreBarApi::readProperty(serialNo, deviceId, propertyId, extra)`. An empty `extra` goes out as JSON `null`, and the reply value is `data.result`. The VivoCube reads use the same call: Wi-Fi config is `deviceId 256, propertyId 7` (`result` is a hex string), and Wi-Fi state is `deviceId 256, propertyId 6` (`result` is an int).
 - What a module actually returns for property 5 hasn't been seen yet; the official app only requires a JSON string.
 
-## Gesture prompt (Dot Key, Knob press, VivoCube buttons, Sense Cube taps) **[C]**
-Every gesture editor has a "Prompt Dialog" section above the action list. It maps onto the scene fields like this:
-`{name: promptText, show: promptEnabled, icon: <prompt background image>, actions: [deployData…]}`. Each gesture also has its own **Enabled** switch; disabled gestures aren't sent.
+## Gesture prompt (Dot Key, Knob press, VivoCube buttons, Sense Cube taps) **[C]** / **[code]**
+Every gesture editor has an **Enabled** switch and a "Prompt Dialog" section above the action list.
+
+- **Official defaults (2026-11-23):**
+  - Enabled and the prompt are both on for a new gesture: `value("enabled", true)` and `value("promptEnabled", true)`.
+  - The prompt text defaults to the panel's title `"%1-%2"`: the translated key name, then the gesture. Examples: "Button1-Click" (Dot Key keys are Button1–3), "Button-Long Press" (Knob).
+  - The text field has no placeholder and holds at most 64 characters (`setMaxLength(64)`). It's trimmed on save. Empty text is allowed, even with the prompt on.
+  - Turning the prompt off only greys out its fields. Their values are kept and still sent.
+- **Stored per gesture:** `enabled`, `promptEnabled`, `promptText`, `promptDialogBg`, `actionList`.
+- **Sent per gesture:** `{actions: [deployData…], name: promptText, show: promptEnabled, icon: promptDialogBg}`, with nothing else.
+  - `name` is the saved text even with the prompt off, and `""` when empty.
+  - `icon` is always present, `""` without an image.
+  - A switched-off gesture, or one without actions, isn't sent: its key is absent. A key with no gestures left is left out. The Knob's `button` is `{keyCode: 0, …}`.
+- **Picture:** only the cloud picker (the "Icon" and "Background" tabs), plus "Clear" from a right-click menu. There's no local file and no zoom. `promptDialogBg` is the cloud icon's `path` URL, sent as is (not in the deploy zip). The app keeps a copy (trimmed of transparent edges) only for its own preview.
+- **On the bar [code]** (launcher 1.0.9 `SceneDialog`, layout `scene_dialog`):
+  - The prompt is a full-screen overlay (80% black) with a 625 dp wide card.
+  - On the card's left is the picture: an `ImageFilterView` 200 dp wide and as tall as the card (the screen minus 80 dp, so most likely 200 dp; the screen height isn't confirmed). It has 40 dp rounded corners and `scaleType` fitXY, so the picture is **stretched, not cropped**.
+  - The picture loads through `GlideExtend.loadSmartAsBitmap` (http(s), `file://`, files under the launcher's folder). `BitmapTrimUtil.trimTransparentBorder(bmp, 1)` first cuts away the border of pixels with alpha ≤ 1. A fully transparent picture shows nothing.
+  - To its right, `name` is shown at 35 dp, white, on one line ending in "…", over a fixed "Running".
+  - The prompt closes after **800 ms**. A gesture that runs in that time reuses it and restarts the timer; a missing `icon` then keeps the previous picture. Tapping closes it early.
+  - `show` is checked in `SceneTool$1.onStart`. When it's false only the key sound plays. Without `show`, fastjson's `ClickEvent` default is true.
+  - Nothing reads an `enabled` field on module gestures. A gesture without `actions` isn't registered, and pressing it does nothing (no sound, no prompt).
+- **This app:**
+  - Each gesture has an On switch (stored only when off) and a prompt with a switch, text and picture. A switched-off gesture isn't sent, its computer actions stay out of the allowlist, and deploy checks skip it.
+  - Empty text sends the first action's name (cut at 40 characters), as earlier versions always did, rather than the official "Button1-Click".
+  - Layouts saved before this change had a bare action list per gesture. They load as gestures with nothing else set, deploy exactly as before (shown, named after the first action) and keep their "deployed" state.
+  - The picture comes from a file or the cloud library (the phase 2 picker). It's prepared at 200×200: a file is center-cropped to fill it, and a library icon is centered at 80%. Two corner pixels get alpha 2 (invisible) so the launcher's trim keeps the whole square and doesn't stretch the rest. It goes to the bar like card images (`file://ultrabar-app/image/<hash>.png`, see "Card images on the bar"). It's only sent while the prompt is on.
+  - `icon` is left out rather than sent empty.
 
 ## Sense Cube **[C]**
 - **Per-profile module config:** `{"tap": [{mode, name, show, icon, actions}, …]}`.
@@ -662,13 +687,39 @@ Card `{id, type: "PC_BOOT", name, param: {uid}}`, with Name plus a picker for wh
   - CPU is only sampled while the bar keeps asking, so the first reply after a pause is null.
   - Readings need "Let the bar control this computer". Otherwise the reply is null.
 
-## Hotkeys **[C]**
+## Hotkeys **[C]** / **[code]**
 - Hotkeys are `{output: 5, keys: [...], keysDesc}`, and `keys` uses one 16-bit code space:
-  - keyboard usages as is (`4` = A …)
-  - consumer keys as **10000 + usage**: Play/Pause 10205, Next 10181, Previous 10182, Stop 10183, Fast Forward 10179, Rewind 10180, Vol+ 10233, Vol− 10234, Brightness+ 10111, Brightness− 10112, Display Toggle 10177. There are also browser keys (Back, Forward, Favorites) and app keys (Mail, Calculator, Media Player, My Computer).
-  - system keys as **20000 + usage**: Power 20129, Sleep 20130, Wake 20131.
-- The editor has a recorder plus an on-screen keyboard ("Hot Key Selector") with tabs for System, Media, Application and Browser keys.
-- Whether the bar's hub can send consumer and system usages over its keyboard gadget hasn't been checked **[I]**.
+  - Keyboard usages are used as is (`4` = A …).
+  - Consumer keys are **10000 + usage**.
+  - System keys are **20000 + usage**.
+- **The official selector** (`HotKeySelector`, table `HidKeyboardDef`) is one window: a full keyboard and numpad, with Mute, Vol−, Vol+ and Power at the top right. Below it are four groups:
+
+| Group | Keys (code name) |
+|---|---|
+| System Keys | 20129 Power, 20130 Sleep, 20131 Wake, 10111 Brightness+, 10112 Brightness-, 10177 Display Toggle |
+| Media Keys | 10182 Previous, 10181 Next, 10205 Play/Pause, 10183 Stop, 10180 Rewind, 10179 Fast Forward, 10233 Volume+, 10234 Volume-, 10226 Mute |
+| Application Keys | 10394 Mail, 10402 Calculator, 10387 MediaPlayer, 10404 MyComputer, 10545 Search |
+| Browser Keys | 10548 Back, 10549 Forward, 10551 Refresh, 10550 Stop, 10545 Search, 10546 Favorites, 10547 Home |
+
+  - Picking a consumer or system key clears the combination first, so it's always alone. Picking a normal key clears a consumer or system key. Normal keys combine, up to 5. "Finish" replaces the whole combination.
+  - The live recorder (`HotkeyHidTable`) has no consumer keys.
+- **`keysDesc`** is `"[" + name + "]"` joined with `" + "`, e.g. `[Ctrl] + [Shift] + [A]` or `[Volume+]`. Only the hotkey editor writes it. On loading, the editor rebuilds it from `keys` using the keys' short labels.
+  - **Nothing on the bar reads `keysDesc` [code]**: neither launcher 1.0.9 nor hub 1.0.4 contains the string.
+- **On the bar [code]:**
+  - The launcher passes `keys` to the hub unfiltered from cards, shortcut-group buttons and actions.
+  - Hub 1.0.4's `HidKeyboardOut.sendKeys(int[])` sends only the **first** key of 10000 or more, ignoring every other key, modifiers included. Other codes are cut to a byte, so 256–9999 type a wrong key.
+  - `sendSystemOrConsumerKey` maps codes to bits of its own reports:
+    - **Consumer:** report 2, `[0x02, b1, b2, b3]`. b1: 10111, 10112, 10182, 10181, 10205, 10183, 10180, 10179. b2: 10233, 10234, 10226, 10394, 10402, 10387, 10404, 10545. b3: 10548, 10549, 10551, 10550, 10546, –, 10547.
+    - **System:** report 3, `[0x03, bits]`. 20129 = 0x01, 20131 = 0x02, 20130 = 0x04. 10177 is sent as `[0x03, 0x08]` on the system report.
+    - Any other code is logged as unknown and nothing is sent.
+  - `mIsNewFwVersion` is true when `/dev/hidg0` is dated 2026-08-01 00:00 (the bar's time zone) or later, or has no date. Only the keyboard report depends on it: 9 bytes with report id 1 when true, 8 bytes without an id when false. Consumer and system reports are written the same either way.
+  - Whether the older USB gadget (keyboard report without an id) accepts reports 2 and 3 **can't be told from the APK [I]**. Releasing keys always writes them too.
+  - A tap is press, then release after 15 ms. A tap that arrives while one is in progress is ignored.
+- **This app:**
+  - Next to the recorder, a "Media and system keys" picker has the same keys in four tabs (Media, System, Apps, Browser, grouped as above). Picking one replaces the shortcut.
+  - The editor notes that bars with base firmware from before August 2026 may not send these keys.
+  - `keysDesc` isn't sent, to save room in the 8 KB line.
+  - Store packs may use the supported special keys. A pack button combining one with other keys is reduced to that key alone, which is what the bar sends.
 
 ## Start App **[C]**
 - **Editor:** "Launch Mode:" with two exclusive checkboxes. **"Single Instance" is checked by default and saves `launchMode: 2`**; "New Instance" saves `0`.
@@ -695,17 +746,63 @@ Card `{id, type: "PC_BOOT", name, param: {uid}}`, with Name plus a picker for wh
   - The old clipboard isn't restored.
 - **macOS:** types the text through System Events.
 
-## App Capability actions (`30750`–`30752`) **[C]**
-- Pick an app, then one of its actions. Each param is `{id, name, type, placeholder, required, options, dependsOn}`.
-- `type: "TEXT"` is a text field. Otherwise `options.provider` is `STATIC` (`items: [{label, value}]`) or `REMOTE`. `REMOTE` pages through `30752` with `cursor`/`limit` and a "More" button, using `nextCursor`/`hasMore` from the reply.
-- The action is `{type: "APP_CAPABILITY", values: [{id: "1", value: {packageName, actionId, params}}]}` **[I]** (nesting), and its `configDesc` reads "App Capability: <app> -> <action> (k=v; …)".
+## App Capability actions (`30750`–`30752`) **[C]** / **[code]**
+- **Which apps [code]:** an app offers actions when it has a service with the meta-data `ultrabar.plugin`.
+  - The launcher starts it (`startForegroundService`), and the app connects back to `127.0.0.1:39001` with JSON messages (`register`, `actions`, `describe`, `get_options`, `call`, `heartbeat`).
+  - Only actions with the CALL feature (bit 1) are offered.
+- **The node [code]:** `1205` with `"sc.other"` lists one node, or none when no running app has a CALL action:
+  `{parentId: "sc.other", id: "capability", name: "App Capability", objectName: "App Capability", type: "APP_CAPABILITY", last: true, components: [{id: "1", name: "App", uiType: "SELECT", inputType: "STR", options: [{label: <app name>, value: <packageName>}]}]}`. The official app takes its app list from these options and picks the first app.
+- **`30750` [code]:** `data` is the bare package name. The reply is `[{actionId, name, description, features}]`. Without a running app it fails with `no active session for packageName=…`.
+- **`30751` [code]:** `{packageName, actionId}`. The reply is `[{id, name, type, placeholder, required, maxLength, dependsOn: [id…], options: {provider, items: [{label, value}], searchable}}]`.
+  - `type` is one of `TEXT`, `TEXTAREA`, `NUMBER`, `BOOLEAN`, `SELECT` or `MULTI_SELECT`.
+  - `provider` is `STATIC` or `REMOTE`.
+- **`30752` [code]:** `{packageName, actionId, describeId, searchText, cursor, limit, params}`. The launcher's default `limit` is 10.
+  - The reply is the app's own answer: `{success, error?, items: [{label, value}], nextCursor, hasMore}`.
+  - An app error arrives as a normal reply with `success: false` and `error: {code, message, …}` (e.g. `MISSING_PARAM`).
+- **Official requests [C]:**
+  - `30750` `"<pkg>"`, then `30751` `{actionId, packageName}`.
+  - `30752` is `{actionId, packageName, describeId: <param id>, cursor, limit: 20, params}`, with no `searchText`. `cursor` is `""` for the first page and `nextCursor` for "More". `params` holds **only** the values of the `dependsOn` ids. "More" sends `{}`, which looks like a bug.
+  - A param whose dependencies aren't all set isn't loaded. Changing a param clears the ones that depend on it.
+  - Only `TEXT` is a text field; every other type is a list.
+  - Values are strings. Empty ones are left out.
+- **Official action [C]:** `{id: "capability", type: "APP_CAPABILITY", values: [{id: "1", value: "<JSON text>"}]}`, with no `name`.
+  - The value is `{actionId, packageName, params}` written as a **string** (compact, keys sorted).
+  - `configDesc` is `"App Capability: <app> -> <action>"`, plus `" (name=value; …)"` when there are params.
+- **On the bar [code]:** `AppCapabilityAction.execute` reads value `"1"` **as a string** (`getValueToStr`) and parses it into `{packageName, actionId, params}`. An object fails with a `ClassCastException`.
+  - Params are passed to the app as they are; the app checks required ones (`MISSING_PARAM`).
+  - If the app isn't running, the action never finishes (no `onComplete`, no `onError`).
+- **This app:** the same flow and requests. The differences:
+  - `TEXTAREA` gets a multi-line field and `NUMBER` a number field.
+  - A `BOOLEAN` without its own list gets Yes/No (`"true"`/`"false"`). What such an app expects hasn't been seen **[I]**.
+  - `MULTI_SELECT` picks one value, as in the official app.
+  - "More" sends the dependency values again.
+  - The action stores the app, action and param names and labels, so it reads the same offline. The summary is "<app> → <action> (name: value; …)".
+  - Deploy checks flag an app action whose app isn't on the bar.
 
 ## Plugins (shortcut packs) **[C]**
 - An installed pack adds a palette group with the whole pack as a `HOT_KEY_GROUP` card ("Shortcut Group": Name and Icon only) and **every button as its own draggable `PC_CONTROL` card**.
-- The `PLUGIN_WIDGET` action picks an installed pack, then one of its buttons, and becomes `{type: "PC_CONTROL", values: [{id: "1", value: <button param>}]}`.
+  - `CBPluginWidgetItem` reads the button's `name`, `icon`, `iconScale` (50 if missing) and `param`.
+  - The button's `type` and `spanSize` are ignored.
+  - `output` 5 becomes a hotkey. `output` 10 with `inputText`, `openBrowser`, `openFileOrFolder` or `execCmd` becomes that action. Anything else throws "unknown widget type".
+- **The `PLUGIN_WIDGET` action** picks an installed pack (`pluginType` 0), then any of its buttons, unfiltered.
+  - It becomes `{type: "PC_CONTROL", values: [{id: "1", value: <button param, unchanged>}]}`, with no `id` or `name`, and `configDesc` "Plugin: <pack>/<button>".
+  - It doesn't record which pack or button it came from.
+  - On the bar it's only a root node of `1205` (`{id: "1", name: "Plugin", objectName: "Corebar", type: "PLUGIN_WIDGET", last: true}`). Nothing on the bar runs that type **[code]**.
+- **Install** keeps the pack in the project database: a `json_store` row with `type "plugin"`, the identifier, `pluginType`, the store columns and `config.json`, plus the zip as a blob. The zip is unpacked into `<data>/plugin/<…>/` when used.
+  - The catalog's `sha256` is read but **never checked**; the binary has no hashing code.
+  - There are no update checks: the store only switches "Install" to "Installed".
+  - **Uninstall** (after a confirmation) removes the row and the unpacked folder.
+  - **Reload** deletes the unpacked folder and unpacks the stored zip again.
 - Pack icons are written into the deploy zip as `file://` images.
 - The store shows `pluginType` as "Widgets" or "Images". Every pack in the store today is "Widgets".
-- Packs can be uninstalled and reloaded from the palette.
+- **This app:**
+  - Installed packs are app state in the app data folder (`packs/<store id>.json`: the store record and the unpacked pack with its images), not in `layout.json`.
+  - Installing checks the download against the catalog's SHA-256 (the official app doesn't).
+  - "Reload from the store" downloads the pack again. It becomes "Update to …" when the store has a newer `versionCode`.
+  - Uninstalling needs no confirmation: cards made from the pack keep copies of its buttons and stay as they are.
+  - The palette has a foldable group per installed pack: the whole pack first, then every button `packAction` accepts (shortcuts, typed text and http(s) links) as its own computer-action card. The card's art uses the button's icon at 50%.
+  - The action picker's "Shortcut pack button" entry yields a plain `PC_CONTROL` action (id `"1"`, like any computer action). It's offered on every firmware, because the bar only ever sees a computer action.
+  - Existing shortcut-group cards made from packs are unchanged.
 
 ## Cloud icon library (no login) **[C]**, checked 2026-11-22 and live on 2026-11-23
 - **Tags:** `GET https://gatewayssl.dev.aiks360.com/api/v1/base-service/pub/icon/tags/locales/allGrouped`.

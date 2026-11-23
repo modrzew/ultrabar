@@ -5,6 +5,7 @@ mod discovery;
 mod icons;
 mod market;
 mod metrics;
+mod packs;
 mod pc_agent;
 mod protocol;
 mod screen;
@@ -32,6 +33,7 @@ pub struct AppState {
     conn: Mutex<Option<ConnHandle>>,
     icons: Arc<icons::IconServer>,
     pub discord: discord::Discord,
+    packs: packs::Packs,
 }
 
 impl AppState {
@@ -204,14 +206,26 @@ async fn icon_library_image(url: String) -> Result<String, String> {
     market::icon_image(&url).await
 }
 
-/// Downloads a shortcut pack, checks it against the catalog's hash and unpacks it.
+/// Shortcut packs installed on this computer.
 #[tauri::command]
-async fn store_plugin_pack(
-    file: String,
-    sha256: String,
-    icon: Option<String>,
-) -> Result<market::Pack, String> {
-    market::pack(&file, &sha256, icon.as_deref()).await
+fn installed_packs(state: State<'_, AppState>) -> Vec<packs::InstalledPack> {
+    state.packs.list()
+}
+
+/// Downloads a pack (checked against the store's hash) and keeps it. Also
+/// reloads or updates an installed one, given its latest store record.
+#[tauri::command]
+async fn install_pack(
+    state: State<'_, AppState>,
+    plugin: market::StorePlugin,
+) -> Result<packs::InstalledPack, String> {
+    let pack = market::pack(&plugin.file, &plugin.sha256, plugin.icon.as_deref()).await?;
+    state.packs.save(plugin, pack)
+}
+
+#[tauri::command]
+fn uninstall_pack(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    state.packs.remove(id)
 }
 
 #[tauri::command]
@@ -424,6 +438,7 @@ pub fn run() {
                 conn: Mutex::new(None),
                 icons,
                 discord: discord::Discord::new(dir.clone()),
+                packs: packs::Packs::new(dir.join("packs")),
             });
 
             // Reconnect to the last bar on launch.
@@ -450,7 +465,9 @@ pub fn run() {
             store_apps,
             store_plugins,
             store_app_latest,
-            store_plugin_pack,
+            installed_packs,
+            install_pack,
+            uninstall_pack,
             icon_library_tags,
             icon_library_page,
             icon_library_image,

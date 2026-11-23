@@ -254,8 +254,9 @@ async fn get_bytes(url: &str, max: usize) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// A shortcut pack ready for the UI. Images are data URLs.
-#[derive(Debug, Serialize)]
+/// A shortcut pack ready for the UI. Images are data URLs. Also how an
+/// installed pack is kept on disk (`packs.rs`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Pack {
     pub name: String,
@@ -265,7 +266,7 @@ pub struct Pack {
     pub buttons: Vec<PackButton>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PackButton {
     pub name: String,
