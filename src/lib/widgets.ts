@@ -1,6 +1,10 @@
 import {
   AppWindow,
+  ArrowDownUp,
   AudioLines,
+  Cpu,
+  HardDrive,
+  MemoryStick,
   Headphones,
   HeadphoneOff,
   MessageCircle,
@@ -94,7 +98,24 @@ export const WIDGETS: Record<WidgetType, WidgetDef> = {
   SET: { label: "Bar settings", description: "No longer available on the bar", icon: Settings2, units: 1 },
   DEVICE: { label: "Device", description: "Smart home device", icon: Lightbulb, units: 1 },
   HOT_KEY_GROUP: { label: "Shortcut group", description: "Opens a page of shortcut buttons", icon: LayoutGrid, units: 1, iconCard: true },
+  CPU: { label: "CPU usage", description: "This computer's processor load", icon: Cpu, units: 1 },
+  MEMORY: { label: "Memory usage", description: "How much of this computer's memory is in use", icon: MemoryStick, units: 1 },
+  STORAGE: { label: "Storage usage", description: "How full this computer's disk is", icon: HardDrive, units: 1 },
+  NETWORK: { label: "Network speed", description: "This computer's download and upload speed", icon: ArrowDownUp, units: 1 },
 };
+
+/** Cards the bar fills in by asking this computer (act 1000000 CPU, MEMORY,
+ * STORAGE, NETWORK), with how often it asks, in seconds (launcher 1.0.9). */
+export const SYSTEM_CARDS: Partial<Record<WidgetType, { every: number }>> = {
+  CPU: { every: 3 },
+  MEMORY: { every: 8 },
+  STORAGE: { every: 10 },
+  NETWORK: { every: 5 },
+};
+
+export function isSystemCard(w: Pick<Widget, "type">): boolean {
+  return w.type in SYSTEM_CARDS;
+}
 
 export function widgetUnits(w: Widget) {
   return WIDGETS[w.type].units;
@@ -176,7 +197,8 @@ export function pcIsComplete(pc: PcControl | undefined): boolean {
 export function pcPayload(pc: PcControl): unknown {
   switch (pc.action) {
     case "openBrowser": return { action: "openBrowser", params: { url: pc.url?.trim() ?? "" } };
-    case "startApp": return { action: "startApp", params: { path: pc.path ?? "", launchMode: 0 } };
+    // The official app's numbers: 2 = "Single Instance" (its default), 0 = "New Instance".
+    case "startApp": return { action: "startApp", params: { path: pc.path ?? "", launchMode: pc.launchMode === "new" ? 0 : 2 } };
     case "openFile": return { action: "openFile", params: { path: pc.path ?? "" } };
     case "execCmd": return { action: "execCmd", params: { cmd: pc.cmd ?? "" } };
     case "inputText": return { action: "inputText", params: { text: pc.text ?? "" } };

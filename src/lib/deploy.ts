@@ -1,6 +1,6 @@
 // Turns the layout document into the messages the bar expects.
 import type { Action, Doc, KeyBinding, KeyEvent, ModuleSetup, Profile, Widget } from "./model";
-import { hms, pcIsComplete, pcParam, pcPayload } from "./widgets";
+import { hms, isSystemCard, pcIsComplete, pcParam, pcPayload } from "./widgets";
 import { zoneOffset } from "./timezones";
 
 const LINE_BUDGET = 8000; // bar drops lines over 8192 bytes
@@ -34,6 +34,20 @@ export function hasCardArt(w: Widget) {
 /** Card types the bar no longer has (firmware 1.0.9 shows them as "Not available"). */
 export function isRetired(w: Widget) {
   return w.type === "SET";
+}
+
+/** Card types that need bar firmware 1.0.9 or later. Older launchers don't
+ * know these types, so they're left out rather than risk the whole profile. */
+export function needsNewerFirmware(w: Widget, legacyFirmware: boolean) {
+  return legacyFirmware && isSystemCard(w);
+}
+
+/** What Deploy needs to know about the bar and this computer. */
+export interface DeployContext {
+  /** The bar runs firmware older than 1.0.9. */
+  legacyFirmware?: boolean;
+  /** "Let the bar control this computer" is on (system cards need it). */
+  pcAgentEnabled?: boolean;
 }
 
 /** `buttonIcons[i]` is the icon URL of shortcut-group button `i`. */
@@ -170,13 +184,17 @@ export interface Problem {
 /** Things that would deploy but not work; shown before deploying.
  * `triggerTypes` (from the bar's catalog, when loaded) flags automations
  * whose trigger the bar doesn't offer any more. */
-export function findProblems(doc: Doc, triggerTypes?: string[]): Problem[] {
+export function findProblems(doc: Doc, triggerTypes?: string[], ctx: DeployContext = {}): Problem[] {
   const out: Problem[] = [];
+  let systemCards = false;
   for (const p of doc.profiles) {
     for (const w of p.widgets) {
       const where = `${p.name} › ${w.name}`;
       const at = { profileId: p.id, widgetUid: w.uid };
       if (isRetired(w)) out.push({ where, message: "The bar no longer has this card, so it's left out. Remove it", ...at });
+      if (needsNewerFirmware(w, !!ctx.legacyFirmware)) {
+        out.push({ where, message: "Needs bar firmware 1.0.9 or later, so it's left out. Update the bar", ...at });
+      } else if (isSystemCard(w)) systemCards = true;
       if (w.type === "PC_CONTROL" && !pcIsComplete(w.pc)) out.push({ where, message: "Action isn't set up yet", ...at });
       if (w.type === "SCENE" && !w.actions?.length) out.push({ where, message: "Has no actions", ...at });
       if (w.type === "HOT_KEY_GROUP" && !w.group?.buttons.length) out.push({ where, message: "Has no buttons", ...at });
@@ -195,6 +213,9 @@ export function findProblems(doc: Doc, triggerTypes?: string[]): Problem[] {
         if (a.type === "PC_CONTROL" && !pcIsComplete(a.pc)) out.push({ where: `${p.name} › ${name}`, message: `“${a.summary}” isn't set up yet`, profileId: p.id });
       }
     }
+  }
+  if (systemCards && ctx.pcAgentEnabled === false) {
+    out.push({ where: "Settings", message: "CPU, memory, storage and network cards stay empty until you turn on “Let the bar control this computer”" });
   }
   if (doc.profiles.some((p) => p.widgets.some((w) => w.type === "WEATHER")) && !doc.integrations.weather.apiKey.trim()) {
     out.push({ where: "Weather", message: "Add an AccuWeather API key in Integrations so weather cards can load" });
@@ -225,10 +246,16 @@ export async function buildPlan(
   iconUrl: (w: Widget) => Promise<string | undefined>,
   cardArtUrl: (w: Widget) => Promise<string | undefined>,
   pngUrl: (png: string) => Promise<string>,
+  ctx: DeployContext = {},
 ): Promise<Plan> {
   const allowed: unknown[] = [];
   const allowPc = (pc: Widget["pc"]) => {
-    if (pc && pc.action !== "hotkey" && pcIsComplete(pc)) allowed.push(pcPayload(pc));
+    if (!pc || pc.action === "hotkey" || !pcIsComplete(pc)) return;
+    const payload = pcPayload(pc) as Record<string, unknown>;
+    // Earlier versions of this app sent launchMode 0 for every app and meant
+    // "open it"; this marks the deploys where 0 really means a new copy
+    // (only kept on this computer, see pc_agent.rs).
+    allowed.push(pc.action === "startApp" && pc.launchMode === "new" ? { ...payload, newInstance: true } : payload);
   };
   const scenes: Record<string, unknown>[] = [];
   const profiles: Record<string, unknown>[] = [];
@@ -236,7 +263,7 @@ export async function buildPlan(
   for (const p of doc.profiles) {
     const widgets: Record<string, unknown>[] = [];
     for (const w of p.widgets) {
-      if (isRetired(w)) continue;
+      if (isRetired(w) || needsNewerFirmware(w, !!ctx.legacyFirmware)) continue;
       const url = hasCardArt(w) ? await cardArtUrl(w) : await iconUrl(w);
       const buttons = w.type === "HOT_KEY_GROUP" ? w.group?.buttons ?? [] : [];
       const buttonIcons = await Promise.all(buttons.map((b) => (b.icon ? pngUrl(b.icon) : undefined)));

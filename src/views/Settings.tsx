@@ -20,6 +20,7 @@ function describe(payload: unknown): string {
   if (p.action === "discord") return `Discord: ${DISCORD_VERB[p.params?.op ?? ""] ?? p.params?.op ?? "?"}`;
   if (p.action === "SET_VOLUME") return `Set volume to ${String(p.params)}%`;
   if (p.action === "SET_BRIGHTNESS") return `Set brightness to ${String(p.params)}%`;
+  if (p.action === "SET_MUTE") return (p.params as unknown) === false || (p.params as unknown) === 0 ? "Unmute" : "Mute";
   const v = p.params?.url ?? p.params?.path ?? p.params?.cmd ?? p.params?.text ?? "";
   const verb: Record<string, string> = { openBrowser: "Open", startApp: "Open app", openFile: "Open", execCmd: "Run", inputText: "Type" };
   return `${verb[p.action] ?? p.action} ${v}`;
@@ -97,7 +98,7 @@ export function SettingsView() {
               <div className="grow">
                 <ToggleRow
                   title="Let the bar control this computer"
-                  sub="Computer-action cards open apps, links and files, run commands and type text here."
+                  sub="Computer-action cards open apps, links and files, run commands and type text here. CPU, memory, storage and network cards read their numbers from here."
                   checked={agent} onChange={(v) => void toggleAgent(v)} />
               </div>
             </div>

@@ -377,6 +377,23 @@ input[type="range"].slider::-webkit-slider-thumb { -webkit-appearance: none; wid
 .c-set { background: #1d1d20; }
 .c-apps { background: #1d1d20; }
 .c-apps img { width: 46%; height: auto; border-radius: 22%; }
+/* System cards: the launcher's dark background with a ring gauge or network speeds. */
+.c-gauge { background: linear-gradient(135deg, #46474b 0%, #2b2c2f 100%); }
+.c-gauge .ring { position: absolute; width: 74%; height: auto; aspect-ratio: 1; }
+.c-gauge .ring circle { fill: none; stroke: rgba(255, 255, 255, 0.1); stroke-width: 6.5; }
+.c-gauge .readout { position: relative; text-align: center; line-height: 1.05; }
+.c-gauge .v { font-size: calc(44px * var(--s)); font-weight: 600; font-variant-numeric: tabular-nums; }
+.c-gauge .pct { font-size: calc(34px * var(--s)); font-weight: 600; margin-left: 1px; }
+.c-gauge .lbl { font-size: calc(22px * var(--s)); color: rgba(255, 255, 255, 0.7); margin-top: calc(4px * var(--s)); }
+.c-net .chart { position: absolute; left: 0; right: 0; top: calc(26px * var(--s)); width: 100%; height: 34%; }
+.c-net .chart polyline { fill: none; stroke: rgba(76, 217, 100, 0.55); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+.c-net .rows { position: absolute; left: calc(26px * var(--s)); right: calc(26px * var(--s)); bottom: calc(22px * var(--s)); display: flex; flex-direction: column; gap: calc(6px * var(--s)); border-top: 1px dashed rgba(255, 255, 255, 0.18); padding-top: calc(12px * var(--s)); }
+.c-net .r { display: flex; align-items: baseline; gap: calc(8px * var(--s)); }
+.c-net .r svg { width: calc(22px * var(--s)); height: calc(22px * var(--s)); align-self: center; }
+.c-net .r .dn { color: #4cd964; }
+.c-net .r .up { color: #ffc542; }
+.c-net .r .v { font-size: calc(36px * var(--s)); font-weight: 600; }
+.c-net .r .u { font-size: calc(14px * var(--s)); color: #777; }
 
 /* ───────────────────────── Right panel (library / inspector) ───────────────────────── */
 .panel {

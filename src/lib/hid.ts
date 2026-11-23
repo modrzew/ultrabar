@@ -50,6 +50,7 @@ for (let i = 13; i <= 24; i++) HID_LABEL[91 + i] = `F${i}`;
 for (let i = 0; i <= 9; i++) HID_LABEL[i === 0 ? 98 : 88 + i] = `Num ${i}`;
 
 export const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform || navigator.userAgent);
+export const isWindows = typeof navigator !== "undefined" && /Win/i.test(navigator.platform || navigator.userAgent);
 
 export function hidFromCode(code: string): number | undefined {
   return CODE_TO_HID[code];

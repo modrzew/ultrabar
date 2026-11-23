@@ -12,7 +12,12 @@ export type WidgetType =
   | "SCENE"
   | "SET"
   | "DEVICE"
-  | "HOT_KEY_GROUP";
+  | "HOT_KEY_GROUP"
+  // This computer's load, read by the bar through the PC agent (firmware 1.0.9+).
+  | "CPU"
+  | "MEMORY"
+  | "STORAGE"
+  | "NETWORK";
 
 export type IconSpec =
   | { kind: "glyph"; glyph: string; color: string; png: string }
@@ -33,12 +38,18 @@ export interface DiscordAction {
   label?: string;
 }
 
+/** Open app: "single" brings a running copy to the front (or starts one),
+ * "new" always starts another copy. Missing means "single". */
+export type LaunchMode = "single" | "new";
+
 export interface PcControl {
   action: PcAction;
   /** HID usage codes (hotkey only). */
   keys?: number[];
   url?: string;
   path?: string;
+  /** startApp only. */
+  launchMode?: LaunchMode;
   cmd?: string;
   text?: string;
   discord?: DiscordAction;

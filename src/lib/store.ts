@@ -6,7 +6,7 @@ import {
 import type { Automation, Doc, ModuleEndpoint, ModulePlacement, ModuleSetup, Profile, Widget } from "./model";
 import { uid } from "./model";
 import { newWidget, pcMeta } from "./widgets";
-import { buildPlan, docHash, fitsOneLine, lineSize, modulesPayload } from "./deploy";
+import { buildPlan, docHash, fitsOneLine, lineSize, modulesPayload, type DeployContext } from "./deploy";
 import { cardArtPng, glyphPng } from "./icons";
 
 export type View =
@@ -210,6 +210,11 @@ export function findWidget(doc: Doc, wuid: string): { profile: Profile; widget: 
     if (index >= 0) return { profile, widget: profile.widgets[index], index };
   }
   return null;
+}
+
+/** What deploy checks need to know about the connected bar and this computer. */
+export function deployContext(s: Pick<State, "status" | "info">): DeployContext {
+  return { legacyFirmware: firmwareBefore(s.status.bar?.ver, "1.0.9"), pcAgentEnabled: s.info?.pcAgentEnabled };
 }
 
 export function isDirty(s: Pick<State, "doc" | "status">): boolean {
@@ -476,6 +481,7 @@ export const useApp = create<State>((set, get) => ({
     };
     progress("Preparing");
     const warnings: string[] = [];
+    const ctx = deployContext(get());
     try {
       const published = new Map<string, string>();
       const publish = async (png: string) => {
@@ -494,11 +500,12 @@ export const useApp = create<State>((set, get) => ({
           return publish(await cardArtPng(w.bgColor ?? "#24252b", icon, w.iconScale));
         },
         publish,
+        ctx,
       );
 
       // Firmware 1.0.9 moved the batch scene save to 30500 and accepts an
       // empty list (which clears removed automations); older firmware didn't.
-      const legacy = firmwareBefore(get().status.bar?.ver, "1.0.9");
+      const legacy = !!ctx.legacyFirmware;
       const scenesAct = legacy ? ACT.saveScenesLegacy : ACT.saveScenes;
       const sendScenes = plan.scenes.length > 0 || !legacy;
       // Each message must fit in one line; check before sending anything so

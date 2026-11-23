@@ -2,16 +2,19 @@
 //!
 //! The official app executes whatever the bar sends. Here a PC-control
 //! request only runs if its payload exactly matches an action that was part
-//! of the last layout deployed from this app. Volume and brightness changes
-//! (from a Knob module) only go through when the deployed layout binds a knob
-//! to them.
+//! of the last layout deployed from this app. Volume, mute and brightness
+//! changes (from a Knob module) only go through when the deployed layout
+//! binds a knob to them. Readings (volume, mute, brightness and the system
+//! cards' CPU, memory, storage and network numbers) are answered whenever
+//! the agent is turned on.
 
 use serde::Serialize;
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
-use crate::{AppState, system};
+use crate::apps::LaunchMode;
+use crate::{AppState, metrics, system, typing};
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -36,14 +39,25 @@ pub async fn handle(app: &AppHandle, data: Value) -> Value {
         .and_then(|t| t.as_str())
         .unwrap_or("")
         .to_string();
-    let payload = data.get("payload").cloned().unwrap_or(Value::Null);
+    let mut payload = data.get("payload").cloned().unwrap_or(Value::Null);
+
+    // The official app echoes the whole request back.
+    if kind == "TEST" {
+        return data;
+    }
 
     let (enabled, allowed) = {
         let state = app.state::<AppState>();
         let s = state.settings.lock().unwrap();
         let allowed = match kind.as_str() {
-            "PC_CONTROL" => s.allowed_actions.iter().any(|a| same_action(a, &payload)),
-            "SET_VOLUME" => knob_allowed(&s.allowed_actions, "pc:volume"),
+            "PC_CONTROL" => {
+                let ok = s.allowed_actions.iter().any(|a| same_action(a, &payload));
+                if ok {
+                    payload = with_launch_mode(&s.allowed_actions, payload);
+                }
+                ok
+            }
+            "SET_VOLUME" | "SET_MUTE" => knob_allowed(&s.allowed_actions, "pc:volume"),
             "SET_BRIGHTNESS" => knob_allowed(&s.allowed_actions, "pc:bright"),
             _ => true,
         };
@@ -81,6 +95,38 @@ pub async fn handle(app: &AppHandle, data: Value) -> Value {
             }
             None
         }
+        "GET_MUTE" if enabled => {
+            if let Ok(m) = system::get_mute().await {
+                reply = json!(m);
+            }
+            None
+        }
+        // System cards poll these every few seconds; they aren't logged.
+        "CPU" | "MEMORY" | "STORAGE" if enabled => {
+            let v = match kind.as_str() {
+                "CPU" => metrics::cpu(),
+                "MEMORY" => metrics::memory().await,
+                _ => metrics::storage().await,
+            };
+            if let Some(v) = v {
+                reply = json!(v);
+            }
+            None
+        }
+        "NETWORK" if enabled => {
+            if let Some(n) = metrics::network().await {
+                reply = json!(n);
+            }
+            None
+        }
+        "SET_MUTE" => {
+            let r = match (blocked, mute_value(&payload)) {
+                (Some(b), _) => Err(b.to_string()),
+                (None, None) => Err("missing value".to_string()),
+                (None, Some(m)) => system::set_mute(m).await,
+            };
+            r.is_err().then_some(r)
+        }
         "SET_VOLUME" | "SET_BRIGHTNESS" => {
             let v = payload
                 .as_f64()
@@ -117,6 +163,41 @@ pub async fn handle(app: &AppHandle, data: Value) -> Value {
         );
     }
     json!({ "type": kind, "payload": reply })
+}
+
+/// `SET_MUTE`'s payload: the official app reads a boolean; numbers and
+/// strings are accepted too.
+fn mute_value(payload: &Value) -> Option<bool> {
+    match payload {
+        Value::Bool(b) => Some(*b),
+        Value::Number(n) => n.as_f64().map(|v| v != 0.0),
+        Value::String(s) => match s.trim() {
+            "true" | "1" => Some(true),
+            "false" | "0" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Decides what `launchMode` 0 means for an allowed `startApp` request.
+/// Versions of this app before the launch-mode choice deployed every app
+/// with 0 and meant "open it", which was "bring it to the front" in effect.
+/// Bars still holding those layouts keep that behaviour: 0 only means "new
+/// instance" when the deploy marked the action with `newInstance`.
+fn with_launch_mode(allowed: &[Value], mut payload: Value) -> Value {
+    let is_start = payload.get("action").and_then(|a| a.as_str()) == Some("startApp");
+    let mode = payload.pointer("/params/launchMode").and_then(|m| m.as_i64());
+    if !is_start || LaunchMode::from_param(mode) != LaunchMode::New {
+        return payload;
+    }
+    let marked_new = allowed.iter().any(|a| {
+        same_action(a, &payload) && a.get("newInstance").and_then(|n| n.as_bool()) == Some(true)
+    });
+    if !marked_new && let Some(params) = payload.get_mut("params").and_then(|p| p.as_object_mut()) {
+        params.insert("launchMode".into(), json!(2));
+    }
+    payload
 }
 
 /// The deployed layout binds a Knob to this target (`pc:volume`, `pc:bright`).
@@ -175,11 +256,26 @@ pub async fn execute(app: &AppHandle, payload: &Value) -> Result<(), String> {
                 .open_url(url, None::<&str>)
                 .map_err(|e| e.to_string())
         }
-        "openFile" | "startApp" => {
+        "openFile" => {
             let path = param(payload, "path")?;
             app.opener()
                 .open_path(path, None::<&str>)
                 .map_err(|e| e.to_string())
+        }
+        "startApp" => {
+            let path = param(payload, "path")?;
+            let mode = LaunchMode::from_param(
+                payload.pointer("/params/launchMode").and_then(|m| m.as_i64()),
+            );
+            #[cfg(any(target_os = "macos", windows))]
+            return crate::apps::start(path, mode).await;
+            #[cfg(not(any(target_os = "macos", windows)))]
+            {
+                let _ = mode;
+                app.opener()
+                    .open_path(path, None::<&str>)
+                    .map_err(|e| e.to_string())
+            }
         }
         "execCmd" => {
             let cmd = param(payload, "cmd")?;
@@ -193,7 +289,7 @@ pub async fn execute(app: &AppHandle, payload: &Value) -> Result<(), String> {
                 .spawn();
             spawned.map(|_| ()).map_err(|e| e.to_string())
         }
-        "inputText" => type_text(param(payload, "text")?).await,
+        "inputText" => typing::type_text(param(payload, "text")?).await,
         "discord" => {
             let params = payload.get("params").cloned().unwrap_or(Value::Null);
             app.state::<AppState>().discord.execute(&params).await
@@ -202,49 +298,9 @@ pub async fn execute(app: &AppHandle, payload: &Value) -> Result<(), String> {
     }
 }
 
-#[cfg(target_os = "macos")]
-async fn type_text(text: &str) -> Result<(), String> {
-    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
-    let script = format!("tell application \"System Events\" to keystroke \"{escaped}\"");
-    let out = tokio::process::Command::new("osascript")
-        .args(["-e", &script])
-        .output()
-        .await
-        .map_err(|e| e.to_string())?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "macOS refused to type text. Allow ultrabar under System Settings › Privacy & Security › Accessibility. ({})",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ))
-    }
-}
-
-#[cfg(target_os = "linux")]
-async fn type_text(text: &str) -> Result<(), String> {
-    tokio::process::Command::new("xdotool")
-        .args(["type", "--", text])
-        .status()
-        .await
-        .map_err(|e| format!("xdotool not available: {e}"))
-        .and_then(|s| {
-            if s.success() {
-                Ok(())
-            } else {
-                Err("xdotool failed".into())
-            }
-        })
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-async fn type_text(_text: &str) -> Result<(), String> {
-    Err("typing text isn't supported on this platform yet".into())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::same_action;
+    use super::{mute_value, same_action, with_launch_mode};
     use serde_json::json;
 
     #[test]
@@ -277,5 +333,39 @@ mod tests {
         ));
         let mute = json!({"action": "discord", "params": {"op": "toggleMute"}});
         assert!(same_action(&mute, &mute.clone()));
+    }
+
+    #[test]
+    fn launch_mode_zero_needs_a_new_instance_deploy() {
+        let path = "/Applications/Safari.app";
+        let req = |mode: i64| json!({"action": "startApp", "params": {"path": path, "launchMode": mode}});
+        let mode = |v: &serde_json::Value| v["params"]["launchMode"].as_i64();
+
+        // Deployed by an earlier version: every app had launchMode 0.
+        let legacy = vec![req(0)];
+        assert_eq!(mode(&with_launch_mode(&legacy, req(0))), Some(2));
+
+        // Deployed with "New instance".
+        let mut new = req(0);
+        new["newInstance"] = json!(true);
+        assert_eq!(mode(&with_launch_mode(&[new.clone()], req(0))), Some(0));
+
+        // "Single instance" requests are left alone either way.
+        assert_eq!(mode(&with_launch_mode(&[new], req(2))), Some(2));
+
+        // Other actions are untouched.
+        let cmd = json!({"action": "execCmd", "params": {"cmd": "ls"}});
+        assert_eq!(with_launch_mode(&legacy, cmd.clone()), cmd);
+    }
+
+    #[test]
+    fn mute_accepts_bools_and_numbers() {
+        assert_eq!(mute_value(&json!(true)), Some(true));
+        assert_eq!(mute_value(&json!(false)), Some(false));
+        assert_eq!(mute_value(&json!(1)), Some(true));
+        assert_eq!(mute_value(&json!(0)), Some(false));
+        assert_eq!(mute_value(&json!("true")), Some(true));
+        assert_eq!(mute_value(&json!(null)), None);
+        assert_eq!(mute_value(&json!("maybe")), None);
     }
 }

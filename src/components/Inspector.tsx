@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Copy, Info, MapPin, Search, Trash2 } from "lucide-react";
 import { findWidget, useApp } from "../lib/store";
 import type { Widget } from "../lib/model";
-import { SOUNDSCAPES, WIDGETS, pcMeta } from "../lib/widgets";
+import { SOUNDSCAPES, SYSTEM_CARDS, WIDGETS, pcMeta } from "../lib/widgets";
+import { firmwareBefore } from "../lib/api";
+import { isMac } from "../lib/hid";
 import { allZones, timeIn, zoneCity, zoneOffset, zoneRegion } from "../lib/timezones";
 import { Button, Field, Spinner } from "./ui";
 import { PcControlEditor } from "./editors/PcControlEditor";
@@ -179,7 +181,48 @@ function Body({ w, set }: { w: Widget; set: Setter }) {
           <Note>Controls this device from the bar. Devices come from the bar's smart-home connection.</Note>
         </div>
       );
+    case "CPU":
+    case "MEMORY":
+    case "STORAGE":
+    case "NETWORK":
+      return <SystemCardNotes w={w} />;
   }
+}
+
+const SYSTEM_TEXT: Partial<Record<Widget["type"], string>> = {
+  CPU: "Shows how busy this computer's processor is.",
+  MEMORY: "Shows how much of this computer's memory is in use.",
+  STORAGE: isMac ? "Shows how full this Mac's startup disk is." : "Shows how full this computer's drives are, all drives together.",
+  NETWORK: "Shows this computer's download and upload speed, with a chart.",
+};
+
+/** CPU, memory, storage and network cards have nothing to set up. */
+function SystemCardNotes({ w }: { w: Widget }) {
+  const agentOff = useApp((s) => s.info?.pcAgentEnabled === false);
+  const legacy = useApp((s) => firmwareBefore(s.status.bar?.ver, "1.0.9"));
+  const every = SYSTEM_CARDS[w.type]?.every;
+  return (
+    <div className="stack" style={{ gap: 12 }}>
+      {legacy && (
+        <div className="callout warn">
+          <Info size={14} />
+          <div>Your bar's firmware doesn't have this card, so Deploy leaves it out. It needs firmware 1.0.9 or later.</div>
+        </div>
+      )}
+      {agentOff && (
+        <div className="callout warn">
+          <Info size={14} />
+          <div>
+            The card stays empty while the bar isn't allowed to ask this computer.{" "}
+            <button className="link" onClick={() => useApp.getState().setView({ kind: "settings" })}>Turn it on in Settings</button>
+          </div>
+        </div>
+      )}
+      <Note>
+        {SYSTEM_TEXT[w.type]} The bar asks this computer every {every} seconds while the card is on screen, as long as ultrabar is running. Nothing to set up.
+      </Note>
+    </div>
+  );
 }
 
 function ZonePicker({ w, set }: { w: Widget; set: Setter }) {

@@ -213,10 +213,10 @@ The bar also sends requests the other way. `data = {"type": …, "payload": …}
 
 | `type` | What the official app does |
 |---|---|
-| `TEST` | replies 200 |
+| `TEST` | replies 200 with the request's `data` echoed back |
 | `PC_CONTROL` | `payload.action` ∈ `execCmd {cmd}`, `openFile {path}`, `openBrowser {url}`, `startApp {path, launchMode}`, `inputText {text}`. **It really runs them.** |
-| `SET_VOLUME` / `GET_VOLUME`, `SET_MUTE` / `GET_MUTE`, `SET_BRIGHTNESS` / `GET_BRIGHTNESS` | Changes or reads system audio/display (DDC/CI via dxva2 on Windows) |
-| `CPU`, `MEMORY`, `STORAGE`, `NETWORK` | Replies with usage numbers (`totalReceived` / `totalSent` for network) |
+| `SET_VOLUME` / `GET_VOLUME`, `SET_MUTE` / `GET_MUTE`, `SET_BRIGHTNESS` / `GET_BRIGHTNESS` | Changes or reads system audio/display (DDC/CI via dxva2 on Windows). The `GET_*` replies are `{type, payload}` with an int (volume, brightness) or a bool (mute). The `SET_*` requests get no reply. |
+| `CPU`, `MEMORY`, `STORAGE`, `NETWORK` | Replies with usage numbers (`totalReceived` / `totalSent` for network). See "System cards" under "Official desktop app features". |
 
 If your bridge doesn't run a PC agent, **reply with a 200/empty payload or ignore these**. The system-stat and PC-control widgets just won't do anything.
 
@@ -483,6 +483,13 @@ The launcher wraps pushes in an internal envelope that hub 1.0.1 doesn't know (`
 ```
 No top-level `act` or `id`. Reply to the inner envelope as before (`act 1000000`, its `id`, `code 200`); the launcher waits 5 s for that ack **[code]**. A future hub update may forward the inner message directly, so accept both forms. `PushType` also gained `METRIC`, `MODULE_STATE` and `CPU/MEMORY/STORAGE/NETWORK` **[code]**.
 
+System cards poll the computer while they're on screen (`MetricsBus`, `ScheduledQueryRegistry`) **[code]**:
+- **Intervals:** `CPU` every 3 s, `MEMORY` every 8 s, `NETWORK` every 5 s, `STORAGE` every 10 s. The first query goes out as soon as the card subscribes (`scheduleWithFixedDelay`).
+- **Pushes:** each one is `{type: "CPU"|…, payload: null}`. The launcher reads the reply's `data.payload`.
+- **Percent cards:** read with `getIntValue` (null reads as 0, so the gauge drops to 0%) and `getInteger` for the system provider (null throws, which the launcher catches).
+- **Network card:** reads `payload.totalReceived` and `payload.totalSent` as longs.
+- `PushType` has `TEST` but nothing sends it, and there is no `GET_MUTE`/`SET_MUTE`.
+
 ## Widgets (`1108`)
 - `WidgetType` dropped `COMPUTER_INFO`, `HOT_KEY` and **`SET`**; unknown types render as an "unsupported widget" card ("Not available"). Added `CPU`, `MEMORY`, `STORAGE`, `NETWORK`, `HOT_KEY_GROUP`, `PC_BOOT`, `SENSE_CUBE*`.
 - Params now go through per-type converters (`WidgetCoverRegistry`). `PC_CONTROL` cards are **fixed**: tapping runs the action. They **ignore `bgColor`**; the icon (`getScaledBitmap(265, 265, icon, iconScale/100)` after trimming transparent borders) is all there is, so this app sends a full-card image (520×480, color + symbol) with `iconScale: 100`.
@@ -556,6 +563,8 @@ Each profile's `module` array holds `{productId: "DOT_KEY"|"KNOB_KEY"|…, seria
 ## Knob → computer pushes **[code]**
 A knob bound to `pc:volume` or `pc:bright` pushes `{type: "SET_VOLUME"|"SET_BRIGHTNESS", payload: <0–100>}`. While bound, it polls `GET_VOLUME`/`GET_BRIGHTNESS` every 5 s and expects reply `data` = `{type, payload: <int>}`.
 
+Nothing on the bar pushes `GET_MUTE` or `SET_MUTE` to a computer. Those strings in launcher 1.0.9 and the hub belong to the Sonos and Spotify integrations (`setMute(boolean)` to the speaker).
+
 ## Home Assistant **[code]** / live
 - The bar's Home Assistant support is a separate store app, `com.ultrabar.homeassistant` (1.0.4). Without it the launcher drops `1010` for that package **without replying**. The launcher binds to the app's `IOTService` every 5 s until it's installed.
 - `1010` passes `{url, token}` to the app over IPC. The app builds its websocket address as `url.replace("http", "ws") + "api/websocket"`, so the URL needs a scheme and a **trailing slash**.
@@ -570,8 +579,12 @@ Read from the official app's macOS build (x86_64 slice, symbols intact), and che
 
 ## Builds
 - Windows and macOS have the same feature classes. Only the OS layer differs:
-  - **Windows:** text typed with `SendInput`, CPU from PDH, network from `GetIfTable2`, brightness over DDC/CI (`dxva2`) with a WMI fallback, apps found via ToolHelp and `EnumWindows`, and `.exe`/`.lnk` files in the app picker.
+  - **Windows:** text pasted through the clipboard (see "Type text"), CPU from PDH, network from `GetIfTable2`/`GetIfEntry2`, brightness over DDC/CI (`dxva2`) with a WMI fallback, apps found via ToolHelp and `EnumWindows`, and `.exe`/`.lnk` files in the app picker.
   - **macOS:** apps brought forward with AppleScript `activate`.
+- Bar pushes go through `CBCmdUseCase::onReceiveMessage`:
+  - `TEST` is answered with code 200 and the request's own `data`.
+  - `PC_CONTROL` runs the action.
+  - The other types go to `OSCtrlUseCase::onReceiveMessage2`, which replies only to `GET_*` and the system-card types.
 - The bundled `libusb-1.0.dll` and `Qt6SerialPort.dll` are never imported, so the app has no USB or serial link to the bar. **[C]**
 
 ## Module products **[C]**
@@ -613,9 +626,33 @@ Card `{id, type: "PC_BOOT", name, param: {uid}}`, with Name plus a picker for wh
 - **Action `VIVO_CUBE_TOGGLE`:** pick cube → layer → widget. It sends `values: [{id: "1", …}, {id: "2", …}]`.
 
 ## System cards **[C]**
-- `CPU`, `MEMORY`, `STORAGE`, `NETWORK` ("CPU Usage", "Memory Usage", "Storage Usage", "Network Speed") have no settings.
-- The bar asks the computer through `act 1000000` with `type` `CPU`/`MEMORY`/`STORAGE`/`NETWORK`. The app replies `{type, payload}`, where `payload` is a number, or `{totalReceived, totalSent}` (byte counters) for `NETWORK`.
-- The app also answers `GET_MUTE`/`SET_MUTE` (bool) and `TEST`. Launcher 1.0.9 lists these widget and push types (see above), so the cards should be live there **[I]**.
+- `CPU`, `MEMORY`, `STORAGE`, `NETWORK` ("CPU Usage", "Memory Usage", "Storage Usage", "Network Speed") have no settings. They sit at the top of the palette's "PC Control" group.
+- Each is a `CoreBarCardPCCtrl` whose `extCmd` is the type. Its deployData is `{id, type, name, icon, iconScale}`, and `icon` is the card's image.
+- **On the bar [code]:** the holders don't read `name` or `icon`.
+  - `CPU`, `MEMORY` and `STORAGE` draw a ring gauge with the percentage over a dark background. The labels are fixed: "CPU", "Mem", "SSD".
+  - `NETWORK` shows download and upload speed (Δbytes / 1024 / Δseconds, as KB/s and up) over a speed chart. A counter that goes down shows a negative speed once; nothing clamps it.
+- **Replies:** the app answers `{type, payload}` (see "Firmware 1.0.9" for the polling).
+  - `CPU` is an int capped at 100.
+  - `MEMORY` and `STORAGE` are ints, negative values (errors) sent as 0.
+  - `NETWORK` is `{totalReceived, totalSent}` as unsigned 64-bit byte counters.
+- **What each number is:**
+
+| | macOS | Windows |
+|---|---|---|
+| CPU | `host_statistics(HOST_CPU_LOAD_INFO)` sampled every 1 s by a background thread: (user + system + nice) / all ticks, rounded down | PDH `\Processor Information(_Total)\% Processor Utility` (added with `PdhAddCounterW`, the localized-name API), sampled every 1 s, `PDH_FMT_LONG` |
+| Memory | (active + wired + compressor pages) × page size / `hw.memsize`, rounded | `GlobalMemoryStatusEx`: (total − available) / total, rounded (`dwMemoryLoad` isn't used) |
+| Storage | the volume at `/`: (total − "available for important usage") / total | every drive letter from `GetLogicalDrives`, with no drive-type filter (removable and network drives count): Σ(total − `TotalNumberOfFreeBytes`) / Σ total, sampled every 3 s |
+| Network | `getifaddrs`, link-level entries that are up, not loopback and not `utun*`, summing the 32-bit `ifi_ibytes`/`ifi_obytes` (they wrap at 4 GiB) | only the interface `GetBestInterface` picks for 8.8.8.8, chosen once at startup; `InOctets`/`OutOctets` from `GetIfEntry2` every 1 s. If the computer starts offline, both stay 0. |
+
+- **Mute:** `GET_MUTE` replies with a bool. `SET_MUTE` reads its payload as a JSON boolean (nlohmann `from_json`, which throws on a number).
+  - macOS uses CoreAudio's mute property on the default output device.
+  - Windows uses `IAudioEndpointVolume::GetMute`/`SetMute` on the default render endpoint.
+- **This app:** the same numbers, with these differences.
+  - The macOS network counters come from sysinfo, which reads 64-bit counters, so they don't wrap.
+  - The Windows CPU counter is added by its English name, which works on any display language, and falls back to `% Processor Time`.
+  - The Windows network interface is picked again on every request.
+  - CPU is only sampled while the bar keeps asking, so the first reply after a pause is null.
+  - Readings need "Let the bar control this computer". Otherwise the reply is null.
 
 ## Hotkeys **[C]**
 - Hotkeys are `{output: 5, keys: [...], keysDesc}`, and `keys` uses one 16-bit code space:
@@ -626,11 +663,29 @@ Card `{id, type: "PC_BOOT", name, param: {uid}}`, with Name plus a picker for wh
 - Whether the bar's hub can send consumer and system usages over its keyboard gadget hasn't been checked **[I]**.
 
 ## Start App **[C]**
-- `params.launchMode` is an int:
-  - **0:** always launch (`open "<path>"` on macOS).
-  - **non-zero:** bring the app forward if it's already running, otherwise launch it.
-- The UI calls these "New Instance" and "Single Instance" (which label maps to which number is **[I]**).
-- A "Running List" button fills the path from running GUI apps; on macOS, `LSUIElement`/`LSBackgroundOnly` apps are skipped.
+- **Editor:** "Launch Mode:" with two exclusive checkboxes. **"Single Instance" is checked by default and saves `launchMode: 2`**; "New Instance" saves `0`.
+- **Handler:** reads `launchMode` with `json::at`, so it's required. It runs `startApplication(path, launchMode != 0 ? 2 : 0)`. Mode 1, "activate only, never launch", exists internally but the bar can't ask for it.
+- **macOS:**
+  - **Mode 0:** `open "<path>"`. That also just activates an app that's already running, so on macOS the two modes behave alike.
+  - **Mode 2:** finds the running app by the bundle's identifier (`NSRunningApplication`) and runs AppleScript `tell application id "…" to activate`. Otherwise it runs `open`.
+- **Windows mode 0:** `cmd.exe /C start "" "<path>"` (`CreateProcessW`, `CREATE_NO_WINDOW`).
+- **Windows mode 2:**
+  1. A `.lnk` is resolved with `IShellLinkW::GetPath` (no `Resolve`).
+  2. Running copies are found with ToolHelp and `QueryFullProcessImageNameW`, comparing the full path case-insensitively.
+  3. The first visible, titled window without an owner is brought forward: `ShowWindow(SW_RESTORE)` if minimized, then `AttachThreadInput` to the foreground thread, `SetForegroundWindow` and `BringWindowToTop`.
+  - If the app runs but has no such window (tray only), nothing happens.
+  - If the app isn't running, it starts like mode 0.
+  - Its file dialog keeps forward slashes, so an `.exe` picked there probably never matches a running process **[I]**.
+- **"Running List"** fills the path:
+  - **macOS:** `NSWorkspace.runningApplications` with an `.app` bundle, skipping `LSUIElement`/`LSBackgroundOnly` apps and itself.
+  - **Windows:** visible windows with a title (`EnumWindows`), mapped to the process path with `K32GetModuleFileNameExW`.
+  - The "Running Apps" dialog drops duplicate paths and anything named "UltraWorkSpace", and shows each file name without its extension.
+
+## Type text **[C]**
+- **Windows:** puts the text on the clipboard (`CF_UNICODETEXT`) and sends Ctrl+V with one `SendInput` call.
+  - Line breaks and tabs are pasted as they are; LF isn't turned into CRLF.
+  - The old clipboard isn't restored.
+- **macOS:** types the text through System Events.
 
 ## App Capability actions (`30750`–`30752`) **[C]**
 - Pick an app, then one of its actions. Each param is `{id, name, type, placeholder, required, options, dependsOn}`.
@@ -661,7 +716,10 @@ Card `{id, type: "PC_BOOT", name, param: {uid}}`, with Name plus a picker for wh
 - **App:**
   - `.umpf` project files (SQLite) with New/Open/Save As and a recent list.
   - A separate "Deploy Automation" button that sends only `30500`.
-  - Single-instance guard.
+  - Single-instance guard:
+    - **macOS:** an `fcntl` lock on `/tmp/UltraWorkSpace_ProcessLock_9F2A7C1E4B8D3F0A.lock`.
+    - **Windows:** `CreateMutexA("UltraWorkSpace_ProcessLock_9F2A7C1E4B8D3F0A")`, per session. A restart with `--restarting` skips the check.
+    - A second copy shows "Notice: Ultra WorkSpace is already running" and quits when that's closed. It doesn't bring the first copy forward.
   - "Launch at startup".
 
 # Profile pictures and card sizes (2026-11-22)

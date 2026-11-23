@@ -3,7 +3,7 @@ import {
   AlertTriangle, ArrowUpFromLine, Blocks, Boxes, Check, CheckCircle2, CircleArrowDown, Copy, LayoutGrid, MoreHorizontal, Pencil,
   Plug, Plus, Settings, Star, Trash2, Workflow, XCircle,
 } from "lucide-react";
-import { isDirty, useApp } from "./lib/store";
+import { deployContext, isDirty, useApp } from "./lib/store";
 import { isMac } from "./lib/hid";
 import { findProblems } from "./lib/deploy";
 import { Button, InlineInput, Menu, Modal, Spinner, useMenu } from "./components/ui";
@@ -114,7 +114,7 @@ function DeployButton() {
   const running = deploy.phase === "running";
 
   const start = () => {
-    const problems = findProblems(doc, triggerTypes);
+    const problems = findProblems(doc, triggerTypes, deployContext(useApp.getState()));
     if (!doc.deployedAt || problems.length) setConfirm(true);
     else void useApp.getState().runDeploy();
   };
@@ -144,7 +144,9 @@ function DeployConfirm({ onClose }: { onClose: () => void }) {
   const doc = useApp((s) => s.doc);
   const bar = useApp((s) => s.status.bar);
   const triggerTypes = useApp((s) => s.catalog.triggers).map((t) => t.type);
-  const problems = findProblems(doc, triggerTypes);
+  const info = useApp((s) => s.info);
+  const status = useApp((s) => s.status);
+  const problems = findProblems(doc, triggerTypes, deployContext({ info, status }));
   const first = !doc.deployedAt;
   return (
     <Modal
@@ -178,6 +180,7 @@ function DeployConfirm({ onClose }: { onClose: () => void }) {
                       useApp.getState().setView({ kind: "profile", id: p.profileId });
                       useApp.getState().select(p.widgetUid ?? null);
                     } else if (p.where === "Weather") useApp.getState().setView({ kind: "integrations" });
+                    else if (p.where === "Settings") useApp.getState().setView({ kind: "settings" });
                     onClose();
                   }}
                 >

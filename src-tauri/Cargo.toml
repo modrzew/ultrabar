@@ -23,6 +23,8 @@ tauri-plugin-autostart = "2"
 # Self-update from the GitHub releases, then relaunch into the new version.
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# A second launch brings the running window forward instead of starting another copy.
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["net", "io-util", "time", "sync", "macros", "rt-multi-thread", "process", "fs"] }
@@ -42,10 +44,19 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # the updater pulls in flate2's default backend there, Windows doesn't.
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
-# Computer volume and brightness for the Knob module (see `system.rs`).
+# CPU, memory, disk and network numbers for the bar's system cards (see
+# `metrics.rs`). Windows reads them the way the official app does instead.
+[target.'cfg(not(windows))'.dependencies]
+sysinfo = { version = "0.40", default-features = false, features = ["system", "disk", "network"] }
+
+# Computer volume and brightness for the Knob module (see `system.rs`), and
+# memory numbers on macOS (`metrics.rs`).
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 
+# Volume, mute and brightness (`system.rs`), system card numbers
+# (`metrics.rs`), opening and listing apps (`apps.rs`) and typing text
+# (`typing.rs`).
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
   "Win32_Foundation",
@@ -56,6 +67,19 @@ windows = { version = "0.62", features = [
   "Win32_System_Variant",
   "Win32_Devices_Display",
   "Win32_Graphics_Gdi",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_NetworkManagement_Ndis",
+  "Win32_Storage_FileSystem",
+  "Win32_System_DataExchange",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
+  "Win32_System_Performance",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
 ] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

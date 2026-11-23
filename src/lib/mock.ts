@@ -205,6 +205,11 @@ export async function invoke(cmd: string, args: Record<string, unknown> = {}): P
     case "store_plugins": await sleep(400); return storePlugins;
     case "store_plugin_pack": await sleep(600); return packs[args.file as string];
     case "set_allowed_actions": case "set_pc_agent_enabled": case "test_pc_action": case "refresh_bar_screen": return;
+    case "running_apps": await sleep(300); return [
+      { name: "Safari", path: "/Applications/Safari.app" },
+      { name: "Slack", path: "/Applications/Slack.app" },
+      { name: "Visual Studio Code", path: "/Applications/Visual Studio Code.app" },
+    ];
     case "ha_logged_in": return false;
     case "discord_status": return discord;
     case "discord_set_app": discord = { ...discord, clientId: String(args.clientId), configured: !!args.clientId && (!!args.clientSecret || discord.configured) }; return discord;

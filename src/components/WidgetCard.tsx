@@ -1,9 +1,9 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { CloudSun, Layers, LayoutGrid, Lightbulb, Settings2 } from "lucide-react";
+import { ArrowDown, ArrowUp, CloudSun, Layers, LayoutGrid, Lightbulb, Settings2 } from "lucide-react";
 import type { Widget } from "../lib/model";
-import { SOUNDSCAPES, WIDGETS, formatDuration, pcIsComplete, pcMeta } from "../lib/widgets";
+import { SOUNDSCAPES, WIDGETS, formatDuration, isSystemCard, pcIsComplete, pcMeta } from "../lib/widgets";
 import { timeIn, zoneCity } from "../lib/timezones";
-import { barAppIconUrl } from "../lib/deploy";
+import { barAppIconUrl, needsNewerFirmware, type DeployContext } from "../lib/deploy";
 import { useApp } from "../lib/store";
 
 export function useNow(ms = 10_000) {
@@ -15,8 +15,10 @@ export function useNow(ms = 10_000) {
   return now;
 }
 
-export function cardIssue(w: Widget): string | null {
+export function cardIssue(w: Widget, ctx: DeployContext = {}): string | null {
   if (w.type === "SET") return "No longer available on the bar";
+  if (needsNewerFirmware(w, !!ctx.legacyFirmware)) return "Needs bar firmware 1.0.9 or later";
+  if (isSystemCard(w) && ctx.pcAgentEnabled === false) return "Turn on “Let the bar control this computer” in Settings";
   if (w.type === "PC_CONTROL" && !pcIsComplete(w.pc)) return "Action isn't set up yet";
   if (w.type === "SCENE" && !w.actions?.length) return "Add at least one action";
   if (w.type === "HOT_KEY_GROUP" && !w.group?.buttons.length) return "Has no buttons";
@@ -50,7 +52,42 @@ export function CardFace({ w }: { w: Widget }) {
           <div className="card-label truncate">{w.name}</div>
         </div>
       );
+    case "CPU": return <GaugeFace label="CPU" />;
+    case "MEMORY": return <GaugeFace label="Mem" />;
+    case "STORAGE": return <GaugeFace label="SSD" />;
+    case "NETWORK": return <NetworkFace />;
   }
+}
+
+/** The bar draws a ring gauge with the percentage and a fixed label; the
+ * card's name isn't shown. The value comes from this computer once deployed. */
+function GaugeFace({ label }: { label: string }) {
+  return (
+    <div className="card-center c-gauge" style={{ position: "absolute" }}>
+      <svg viewBox="0 0 100 100" className="ring" aria-hidden>
+        <circle cx="50" cy="50" r="42" />
+      </svg>
+      <div className="readout">
+        <div><span className="v">--</span><span className="pct">%</span></div>
+        <div className="lbl">{label}</div>
+      </div>
+    </div>
+  );
+}
+
+/** Download and upload speed over a small chart. */
+function NetworkFace() {
+  return (
+    <div className="c-gauge c-net" style={{ position: "absolute", inset: 0 }}>
+      <svg viewBox="0 0 100 40" preserveAspectRatio="none" className="chart" aria-hidden>
+        <polyline points="0,34 14,30 26,33 40,22 54,27 68,15 82,24 100,18" />
+      </svg>
+      <div className="rows">
+        <div className="r"><ArrowDown className="dn" /><span className="v">0</span><span className="u">KB/s</span></div>
+        <div className="r"><ArrowUp className="up" /><span className="v">0</span><span className="u">KB/s</span></div>
+      </div>
+    </div>
+  );
 }
 
 function TimeFace() {

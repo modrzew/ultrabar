@@ -64,6 +64,10 @@ export function Library({ profileId }: { profileId: string }) {
           pcItem("openFile", "Open a document or folder"),
           pcItem("execCmd", "Run a shell command"),
           pcItem("inputText", "Type a snippet of text"),
+          basic("CPU"),
+          basic("MEMORY"),
+          basic("STORAGE"),
+          basic("NETWORK"),
         ],
       },
       {

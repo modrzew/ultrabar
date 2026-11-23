@@ -109,6 +109,12 @@ export interface DiscordSound {
   available: boolean;
 }
 
+/** A GUI app running on this computer (`.app` bundle on macOS, executable on Windows). */
+export interface RunningApp {
+  name: string;
+  path: string;
+}
+
 /** A downloaded shortcut pack. Images are data URLs. */
 export interface Pack {
   name: string;
@@ -150,6 +156,7 @@ export const api = {
   setAllowedActions: (actions: unknown[]) => call<void>("set_allowed_actions", { actions }),
   setPcAgentEnabled: (enabled: boolean) => call<void>("set_pc_agent_enabled", { enabled }),
   testPcAction: (payload: unknown) => call<void>("test_pc_action", { payload }),
+  runningApps: () => call<RunningApp[]>("running_apps"),
   publishIcon: (data: string) => call<string>("publish_icon", { data }),
   /** Whether the bar's Home Assistant app is logged in (its own status page). */
   haLoggedIn: (port: number) => call<boolean>("ha_logged_in", { port }),

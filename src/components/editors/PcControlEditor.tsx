@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, Info, Keyboard, Play, RefreshCw, RotateCcw } from "lucide-react";
-import type { DiscordAction, DiscordOp, PcAction, PcControl } from "../../lib/model";
+import { AppWindow, FolderOpen, Info, Keyboard, ListChecks, Play, RefreshCw, RotateCcw } from "lucide-react";
+import type { DiscordAction, DiscordOp, LaunchMode, PcAction, PcControl } from "../../lib/model";
 import { DISCORD_OPS, DISCORD_ORDER, PC_ACTIONS, pcIsComplete, pcPayload } from "../../lib/widgets";
-import { hidFromCode, isMac, isModifier, keyLabel, sortKeys } from "../../lib/hid";
-import { api, errorMessage, isTauri, type DiscordGuild, type DiscordSound } from "../../lib/api";
+import { hidFromCode, isMac, isModifier, isWindows, keyLabel, sortKeys } from "../../lib/hid";
+import { api, errorMessage, isTauri, type DiscordGuild, type DiscordSound, type RunningApp } from "../../lib/api";
 import { useApp } from "../../lib/store";
-import { Button, Field, Spinner } from "../ui";
+import { Button, Empty, Field, Modal, Segmented, Spinner } from "../ui";
 
 const ORDER: PcAction[] = ["hotkey", "startApp", "openBrowser", "openFile", "execCmd", "inputText", "discord"];
 
@@ -49,9 +49,18 @@ export function PcControlEditor({ value, onChange }: { value: PcControl; onChang
         </Field>
       )}
       {value.action === "startApp" && (
-        <Field label="Application">
-          <PathPicker value={value.path} kind="app" onChange={(path) => onChange({ ...value, path }, "path")} />
-        </Field>
+        <>
+          <Field label="Application">
+            <PathPicker value={value.path} kind="app" onChange={(path) => onChange({ ...value, path }, "path")} />
+          </Field>
+          <Field label="If it's already open" hint={(value.launchMode ?? "single") === "new" ? "Not every app can run more than once." : undefined}>
+            <Segmented<LaunchMode>
+              full value={value.launchMode ?? "single"}
+              options={[{ value: "single", label: "Bring to front" }, { value: "new", label: "Open a new copy" }]}
+              onChange={(launchMode) => onChange({ ...value, launchMode })}
+            />
+          </Field>
+        </>
       )}
       {value.action === "openFile" && (
         <Field label="File or folder">
@@ -241,13 +250,15 @@ function HotkeyRecorder({ keys, onChange }: { keys: number[]; onChange: (k: numb
 }
 
 function PathPicker({ value, kind, onChange }: { value?: string; kind: "app" | "any"; onChange: (p: string) => void }) {
+  const [running, setRunning] = useState(false);
+  const appFilter = isMac ? ["app"] : isWindows ? ["exe", "lnk"] : null;
   const pick = async (directory: boolean) => {
     if (!isTauri) return;
     const res = await openDialog({
       directory,
       multiple: false,
       defaultPath: kind === "app" && isMac ? "/Applications" : undefined,
-      filters: kind === "app" && isMac && !directory ? [{ name: "Applications", extensions: ["app"] }] : undefined,
+      filters: kind === "app" && appFilter && !directory ? [{ name: "Applications", extensions: appFilter }] : undefined,
     });
     if (typeof res === "string") onChange(res);
   };
@@ -258,7 +269,43 @@ function PathPicker({ value, kind, onChange }: { value?: string; kind: "app" | "
       <div className="row" style={{ gap: 6 }}>
         <Button size="sm" onClick={() => void pick(false)}><FolderOpen size={12} /> {kind === "app" ? "Choose app…" : "Choose file…"}</Button>
         {kind === "any" && <Button size="sm" onClick={() => void pick(true)}><FolderOpen size={12} /> Choose folder…</Button>}
+        {kind === "app" && <Button size="sm" onClick={() => setRunning(true)}><ListChecks size={12} /> Running apps…</Button>}
       </div>
+      {running && <RunningApps onPick={(p) => { onChange(p); setRunning(false); }} onClose={() => setRunning(false)} />}
     </div>
+  );
+}
+
+/** Apps open on this computer right now, to pick one without browsing for it. */
+function RunningApps({ onPick, onClose }: { onPick: (path: string) => void; onClose: () => void }) {
+  const [apps, setApps] = useState<RunningApp[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = () => {
+    setApps(null);
+    setError(null);
+    api.runningApps().then(setApps).catch((e) => setError(errorMessage(e)));
+  };
+  useEffect(load, []);
+  return (
+    <Modal title="Running apps" icon={<ListChecks size={16} className="faint" />} onClose={onClose}
+      footer={<Button onClick={load} disabled={!apps && !error}><RefreshCw size={12} /> Refresh</Button>}>
+      {error ? (
+        <Empty icon={<AppWindow size={22} />} title="Couldn't list running apps">{error}</Empty>
+      ) : !apps ? (
+        <div className="row" style={{ justifyContent: "center", padding: 32 }}><Spinner /></div>
+      ) : !apps.length ? (
+        <Empty icon={<AppWindow size={22} />} title="No apps with open windows" />
+      ) : (
+        <div className="group">
+          {apps.map((a) => (
+            <div key={a.path} className="group-row click" role="button" tabIndex={0} title={a.path}
+              onClick={() => onPick(a.path)} onKeyDown={(e) => e.key === "Enter" && onPick(a.path)}>
+              <span className="ico"><AppWindow size={16} /></span>
+              <div className="txt"><b>{a.name}</b><span className="mono truncate">{a.path}</span></div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }

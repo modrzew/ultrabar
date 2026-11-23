@@ -1,14 +1,17 @@
+mod apps;
 mod connection;
 mod discord;
 mod discovery;
 mod icons;
 mod market;
+mod metrics;
 mod pc_agent;
 mod protocol;
 mod screen;
 mod store;
 mod system;
 mod tls;
+mod typing;
 
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
@@ -217,6 +220,12 @@ async fn test_pc_action(app: AppHandle, payload: Value) -> Result<(), String> {
     pc_agent::execute(&app, &payload).await
 }
 
+/// GUI apps running on this computer, for choosing an "Open app" target.
+#[tauri::command]
+async fn running_apps(app: AppHandle) -> Result<Vec<apps::RunningApp>, String> {
+    apps::running(&app.config().identifier).await
+}
+
 /// The bar's Home Assistant app reports on its own web page whether it's
 /// logged in to Home Assistant (no session token needed for this one).
 #[tauri::command]
@@ -334,6 +343,15 @@ fn lan_ip() -> Option<String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Registered first so a second launch exits before setting anything
+        // up. It brings this window to the front instead.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
@@ -389,6 +407,7 @@ pub fn run() {
             set_allowed_actions,
             set_pc_agent_enabled,
             test_pc_action,
+            running_apps,
             ha_logged_in,
             discord_status,
             discord_set_app,
