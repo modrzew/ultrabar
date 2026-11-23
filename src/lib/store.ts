@@ -1,12 +1,12 @@
 import { create } from "zustand";
 import {
   ACT, APP_TYPE, api, errorMessage, firmwareBefore, on,
-  type AppInfo, type BarStatus, type DiscordStatus, type PcActionEvent, type PushEnvelope, type StoreApp, type StorePlugin,
+  type AppInfo, type BarStatus, type DiscordStatus, type InstalledPack, type PcActionEvent, type PushEnvelope, type StoreApp, type StorePlugin,
 } from "./api";
 import type { Automation, Doc, ModuleEndpoint, ModulePlacement, ModuleSetup, Profile, Widget } from "./model";
 import { uid } from "./model";
 import { newWidget, pcMeta } from "./widgets";
-import { buildPlan, docHash, fitsOneLine, lineSize, modulesPayload } from "./deploy";
+import { barImageUrl, buildPlan, docHash, fitsOneLine, isHaScene, lineSize, modulesPayload, withImagesFrom, type DeployContext, type Plan } from "./deploy";
 import { cardArtPng, glyphPng } from "./icons";
 
 export type View =
@@ -91,6 +91,9 @@ export interface Market {
   plugins: StorePlugin[];
   state: "idle" | "loading" | "ready" | "error";
   error?: string;
+  /** Latest store version per installed app (`fetchLastVerV3`); null when
+   * the store doesn't have it. Missing until checked. */
+  latest: Record<string, StoreApp | null>;
 }
 
 /** An app the bar is installing or removing. The bar does one at a time. */
@@ -101,6 +104,14 @@ export interface AppJob {
   progress?: number;
   /** Last word from the bar, to notice a lost install. */
   at: number;
+}
+
+/** Shortcut packs installed on this computer. */
+export interface Packs {
+  list: InstalledPack[];
+  loaded: boolean;
+  /** Store id → what's happening to it. */
+  busy: Record<number, "installing" | "removing">;
 }
 
 interface Catalog {
@@ -134,6 +145,7 @@ interface State {
   connectOpen: boolean;
   market: Market;
   appJobs: Record<string, AppJob>;
+  packs: Packs;
   past: Doc[];
   future: Doc[];
 
@@ -157,8 +169,15 @@ interface State {
   dismissToast(id: string): void;
   loadCatalog(): Promise<void>;
   loadMarket(force?: boolean): Promise<void>;
+  /** Asks the store for the latest version of each app on the bar. */
+  checkAppUpdates(): Promise<void>;
   installApp(pkg: string, name: string): Promise<void>;
   uninstallApp(pkg: string, name: string): Promise<void>;
+  loadPacks(): Promise<void>;
+  /** Installs (or reloads, or updates) a shortcut pack; null when it failed
+   * (after a toast). */
+  installPack(p: StorePlugin): Promise<InstalledPack | null>;
+  uninstallPack(id: number): Promise<void>;
   runDeploy(): Promise<void>;
   showProfileOnBar(id: string): Promise<void>;
 
@@ -196,10 +215,30 @@ function defaultDoc(): Doc {
   };
 }
 
+/** Brings profiles saved by earlier versions up to date, in place. Module
+ * gestures used to be bare action lists; they become gestures with no
+ * switch or prompt set, which deploy exactly as before (shown, named after
+ * the first action). */
+export function upgradeProfiles(profiles: Profile[]): Profile[] {
+  for (const p of profiles) {
+    for (const m of p.modules ?? []) {
+      for (const b of Object.values(m.keys ?? {})) {
+        const raw = b as Record<string, unknown>;
+        for (const [e, g] of Object.entries(raw)) {
+          if (Array.isArray(g)) raw[e] = { actions: g };
+          else if (!g || typeof g !== "object" || !Array.isArray((g as { actions?: unknown }).actions)) delete raw[e];
+        }
+      }
+    }
+  }
+  return profiles;
+}
+
 function normalize(doc: Doc): Doc {
   const d = { ...defaultDoc(), ...doc };
   d.integrations = { ...defaultDoc().integrations, ...doc.integrations };
   if (!d.profiles.length) d.profiles = defaultDoc().profiles;
+  upgradeProfiles(d.profiles);
   if (!d.profiles.some((p) => p.isDefault)) d.profiles[0].isDefault = true;
   return d;
 }
@@ -210,6 +249,15 @@ export function findWidget(doc: Doc, wuid: string): { profile: Profile; widget: 
     if (index >= 0) return { profile, widget: profile.widgets[index], index };
   }
   return null;
+}
+
+/** What deploy checks need to know about the connected bar and this computer. */
+export function deployContext(s: Pick<State, "status" | "info"> & { catalog?: Catalog }): DeployContext {
+  return {
+    legacyFirmware: firmwareBefore(s.status.bar?.ver, "1.0.9"),
+    pcAgentEnabled: s.info?.pcAgentEnabled,
+    barApps: s.catalog?.loaded ? s.catalog.apps.map((a) => a.application) : undefined,
+  };
 }
 
 export function isDirty(s: Pick<State, "doc" | "status">): boolean {
@@ -238,8 +286,9 @@ export const useApp = create<State>((set, get) => ({
   toasts: [],
   pcLog: [],
   connectOpen: false,
-  market: { apps: [], plugins: [], state: "idle" },
+  market: { apps: [], plugins: [], state: "idle", latest: {} },
   appJobs: {},
+  packs: { list: [], loaded: false, busy: {} },
   past: [],
   future: [],
 
@@ -285,6 +334,7 @@ export const useApp = create<State>((set, get) => ({
       void get().loadModuleState();
     }
     void get().refreshDiscord();
+    void get().loadPacks();
   },
 
   update(mutate, coalesce, silent) {
@@ -434,10 +484,21 @@ export const useApp = create<State>((set, get) => ({
     set({ market: { ...m, state: "loading", error: undefined } });
     try {
       const [apps, plugins] = await Promise.all([api.storeApps(), api.storePlugins()]);
-      set({ market: { apps, plugins, state: "ready" } });
+      set({ market: { ...get().market, apps, plugins, state: "ready" } });
     } catch (e) {
       set({ market: { ...get().market, state: "error", error: errorMessage(e) } });
     }
+  },
+
+  async checkAppUpdates() {
+    // One lookup per app, as the official app does; failures are left unchecked.
+    const found = await Promise.all(get().catalog.apps.map(async (a) => {
+      const latest = await api.storeAppLatest(a.application).catch(() => undefined);
+      return [a.application, latest] as const;
+    }));
+    const latest = { ...get().market.latest };
+    for (const [pkg, v] of found) if (v !== undefined) latest[pkg] = v;
+    set({ market: { ...get().market, latest } });
   },
 
   async installApp(pkg, name) {
@@ -466,6 +527,42 @@ export const useApp = create<State>((set, get) => ({
     }
   },
 
+  async loadPacks() {
+    const list = await api.installedPacks().catch(() => null);
+    set({ packs: { ...get().packs, list: list ?? get().packs.list, loaded: true } });
+  },
+
+  async installPack(p) {
+    if (get().packs.busy[p.id]) return null;
+    setPackBusy(p.id, "installing");
+    try {
+      const installed = await api.installPack(p);
+      const list = [...get().packs.list.filter((x) => x.plugin.id !== p.id), installed]
+        .sort((a, b) => a.plugin.name.localeCompare(b.plugin.name, undefined, { sensitivity: "base" }) || a.plugin.id - b.plugin.id);
+      set({ packs: { ...get().packs, list } });
+      return installed;
+    } catch (e) {
+      get().toast({ kind: "error", title: `Couldn't install ${p.name}`, body: errorMessage(e) });
+      return null;
+    } finally {
+      setPackBusy(p.id, null);
+    }
+  },
+
+  async uninstallPack(id) {
+    const pack = get().packs.list.find((x) => x.plugin.id === id);
+    setPackBusy(id, "removing");
+    try {
+      await api.uninstallPack(id);
+      set({ packs: { ...get().packs, list: get().packs.list.filter((x) => x.plugin.id !== id) } });
+      get().toast({ kind: "success", title: `Uninstalled ${pack?.plugin.name ?? "the pack"}`, body: "Cards you made from it stay as they are." });
+    } catch (e) {
+      get().toast({ kind: "error", title: "Couldn't uninstall the pack", body: errorMessage(e) });
+    } finally {
+      setPackBusy(id, null);
+    }
+  },
+
   async runDeploy() {
     if (get().deploy.phase === "running") return;
     const doc = get().doc;
@@ -476,38 +573,65 @@ export const useApp = create<State>((set, get) => ({
     };
     progress("Preparing");
     const warnings: string[] = [];
+    const ctx = deployContext(get());
     try {
-      const published = new Map<string, string>();
-      const publish = async (png: string) => {
-        if (!published.has(png)) published.set(png, await api.publishIcon(png));
-        return published.get(png)!;
+      // Every image goes to the bar as `file://ultrabar-app/image/<id>.png`
+      // and is uploaded below; ids are content hashes kept on this computer.
+      const images = new Map<string, string>();
+      const image = async (png: string) => {
+        if (!images.has(png)) images.set(png, await api.storeIcon(png));
+        return barImageUrl(images.get(png)!);
       };
-      const plan = await buildPlan(
+      let plan = await buildPlan(
         doc,
         async (w) => {
           if (!w.icon) return undefined;
-          return w.icon.kind === "url" ? w.icon.url : publish(w.icon.png);
+          return w.icon.kind === "url" ? w.icon.url : image(w.icon.png);
         },
         async (w) => {
-          const fallback = w.type === "PC_CONTROL" && w.pc ? pcMeta(w.pc).glyph : w.type === "HOT_KEY_GROUP" ? "layout-grid" : "layers";
+          const fallback = w.type === "PC_CONTROL" && w.pc ? pcMeta(w.pc).glyph : w.type === "HOT_KEY_GROUP" ? "layout-grid" : isHaScene(w) ? "sparkles" : "layers";
           const icon = w.icon?.kind === "url" ? w.icon.url : w.icon?.png ?? (await glyphPng(fallback, "#ffffff"));
-          return publish(await cardArtPng(w.bgColor ?? "#24252b", icon, w.iconScale));
+          return image(await cardArtPng(w.bgColor ?? "#24252b", icon, w.iconScale));
         },
-        publish,
+        image,
+        ctx,
       );
 
       // Firmware 1.0.9 moved the batch scene save to 30500 and accepts an
       // empty list (which clears removed automations); older firmware didn't.
-      const legacy = firmwareBefore(get().status.bar?.ver, "1.0.9");
+      const legacy = !!ctx.legacyFirmware;
       const scenesAct = legacy ? ACT.saveScenesLegacy : ACT.saveScenes;
       const sendScenes = plan.scenes.length > 0 || !legacy;
       // Each message must fit in one line; check before sending anything so
       // a failed deploy doesn't leave the bar half-updated.
-      if (sendScenes && !fitsOneLine(scenesAct, plan.scenes)) {
-        throw new Error(`Your multi-actions and automations are too large to send in one go (${kb(lineSize(scenesAct, plan.scenes))} of 8 KB). Remove a few actions and try again.`);
-      }
-      if (!fitsOneLine(ACT.saveProfiles, plan.profiles)) {
-        throw new Error(`Your profiles are too large to send in one go (${kb(lineSize(ACT.saveProfiles, plan.profiles))} of 8 KB). Remove a few cards, actions or shortcut-group buttons, or shorten long names, commands and text.`);
+      const checkSizes = (p: Plan) => {
+        if (sendScenes && !fitsOneLine(scenesAct, p.scenes)) {
+          throw new Error(`Your multi-actions and automations are too large to send in one go (${kb(lineSize(scenesAct, p.scenes))} of 8 KB). Remove a few actions and try again.`);
+        }
+        if (!fitsOneLine(ACT.saveProfiles, p.profiles)) {
+          throw new Error(`Your profiles are too large to send in one go (${kb(lineSize(ACT.saveProfiles, p.profiles))} of 8 KB). Remove a few cards, actions or shortcut-group buttons, or shorten long names, commands and text.`);
+        }
+      };
+      // Firmware before 1.0.9 can't take the images, so it loads them from
+      // this computer's image server.
+      const fromThisComputer = async () => {
+        const base = await api.iconHttpBase();
+        plan = { ...plan, profiles: withImagesFrom(plan.profiles, base), scenes: withImagesFrom(plan.scenes, base) };
+        checkSizes(plan);
+      };
+      if (legacy && images.size) await fromThisComputer();
+      else checkSizes(plan);
+
+      if (!legacy && images.size) {
+        // Before anything that points at them. This replaces the images
+        // uploaded by the last deploy.
+        progress("Sending images");
+        try {
+          await api.uploadBarImages([...new Set(images.values())]);
+        } catch (e) {
+          await fromThisComputer();
+          warnings.push(`Images: the bar didn't take them (${errorMessage(e)}), so it loads them from this computer for now. They only show while ultrabar runs here; deploy again to fix that.`);
+        }
       }
 
       if (plan.modules) {
@@ -666,6 +790,13 @@ export const useApp = create<State>((set, get) => ({
     return a.id;
   },
 }));
+
+function setPackBusy(id: number, what: Packs["busy"][number] | null) {
+  const busy = { ...useApp.getState().packs.busy };
+  if (what) busy[id] = what;
+  else delete busy[id];
+  useApp.setState({ packs: { ...useApp.getState().packs, busy } });
+}
 
 function setJob(pkg: string, job: Omit<AppJob, "at"> | null) {
   const jobs = { ...useApp.getState().appJobs };

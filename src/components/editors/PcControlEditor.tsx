@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, Info, Keyboard, Play, RefreshCw, RotateCcw } from "lucide-react";
-import type { DiscordAction, DiscordOp, PcAction, PcControl } from "../../lib/model";
+import { AppWindow, FolderOpen, Info, Keyboard, ListChecks, Music, Play, RefreshCw, RotateCcw } from "lucide-react";
+import type { DiscordAction, DiscordOp, LaunchMode, PcAction, PcControl } from "../../lib/model";
 import { DISCORD_OPS, DISCORD_ORDER, PC_ACTIONS, pcIsComplete, pcPayload } from "../../lib/widgets";
-import { hidFromCode, isMac, isModifier, keyLabel, sortKeys } from "../../lib/hid";
-import { api, errorMessage, isTauri, type DiscordGuild, type DiscordSound } from "../../lib/api";
+import { SPECIAL_GROUPS, SPECIAL_KEYS, hidFromCode, isMac, isModifier, isSpecialKey, isWindows, keyLabel, sortKeys, type SpecialGroup } from "../../lib/hid";
+import { api, errorMessage, isTauri, type DiscordGuild, type DiscordSound, type RunningApp } from "../../lib/api";
 import { useApp } from "../../lib/store";
-import { Button, Field, Spinner } from "../ui";
+import { Button, Empty, Field, Modal, Segmented, Spinner } from "../ui";
 
 const ORDER: PcAction[] = ["hotkey", "startApp", "openBrowser", "openFile", "execCmd", "inputText", "discord"];
 
@@ -38,7 +38,9 @@ export function PcControlEditor({ value, onChange }: { value: PcControl; onChang
       </Field>
 
       {value.action === "hotkey" && (
-        <Field label="Shortcut" hint="The bar types this as a USB keyboard, so it works when the bar is plugged into this computer.">
+        <Field label="Shortcut" hint={(value.keys ?? []).some(isSpecialKey)
+          ? SPECIAL_KEY_HINT
+          : "The bar types this as a USB keyboard, so it works when the bar is plugged into this computer."}>
           <HotkeyRecorder keys={value.keys ?? []} onChange={(keys) => onChange({ ...value, keys })} />
         </Field>
       )}
@@ -49,9 +51,18 @@ export function PcControlEditor({ value, onChange }: { value: PcControl; onChang
         </Field>
       )}
       {value.action === "startApp" && (
-        <Field label="Application">
-          <PathPicker value={value.path} kind="app" onChange={(path) => onChange({ ...value, path }, "path")} />
-        </Field>
+        <>
+          <Field label="Application">
+            <PathPicker value={value.path} kind="app" onChange={(path) => onChange({ ...value, path }, "path")} />
+          </Field>
+          <Field label="If it's already open" hint={(value.launchMode ?? "single") === "new" ? "Not every app can run more than once." : undefined}>
+            <Segmented<LaunchMode>
+              full value={value.launchMode ?? "single"}
+              options={[{ value: "single", label: "Bring to front" }, { value: "new", label: "Open a new copy" }]}
+              onChange={(launchMode) => onChange({ ...value, launchMode })}
+            />
+          </Field>
+        </>
       )}
       {value.action === "openFile" && (
         <Field label="File or folder">
@@ -180,8 +191,14 @@ function SoundPicker({ value, onChange }: { value: DiscordAction; onChange: (d: 
   );
 }
 
+/** Shown under a media, browser, app or power key. The hub sends these on
+ * their own HID reports; bars whose base firmware predates August 2026 (the
+ * hub's cut-off) may not take those, which hasn't been tried on a bar. */
+const SPECIAL_KEY_HINT = "The bar sends this key on its own, as a USB keyboard, so it works when the bar is plugged into this computer. Bars with base firmware from before August 2026 may not send it.";
+
 function HotkeyRecorder({ keys, onChange }: { keys: number[]; onChange: (k: number[]) => void }) {
   const [recording, setRecording] = useState(false);
+  const [picking, setPicking] = useState(false);
   const held = useRef<Set<number>>(new Set());
   const combo = useRef<number[]>([]);
   const ref = useRef<HTMLButtonElement>(null);
@@ -236,18 +253,47 @@ function HotkeyRecorder({ keys, onChange }: { keys: number[]; onChange: (k: numb
       <Button icon onClick={recording ? () => setRecording(false) : start} title={recording ? "Stop" : "Record again"}>
         {recording ? <Keyboard size={14} /> : <RotateCcw size={14} />}
       </Button>
+      <Button icon onClick={() => { setRecording(false); setPicking(true); }} title="Media and system keys" aria-label="Media and system keys">
+        <Music size={14} />
+      </Button>
+      {picking && <SpecialKeyPicker value={keys} onClose={() => setPicking(false)} onPick={(k) => { onChange([k]); setPicking(false); }} />}
     </div>
   );
 }
 
+/** On-screen picker for keys a keyboard usually doesn't have: media, power,
+ * app and browser keys. Picking one replaces the shortcut, because the bar
+ * can't send one together with other keys. */
+function SpecialKeyPicker({ value, onPick, onClose }: { value: number[]; onPick: (code: number) => void; onClose: () => void }) {
+  const current = value.find(isSpecialKey);
+  const [tab, setTab] = useState<SpecialGroup>(SPECIAL_KEYS.find((k) => k.code === current)?.group ?? "media");
+  return (
+    <Modal title="Media and system keys" icon={<Music size={16} className="faint" />} onClose={onClose}>
+      <div className="stack" style={{ gap: 12 }}>
+        <Segmented full value={tab} onChange={setTab} options={SPECIAL_GROUPS.map((g) => ({ value: g.key, label: g.label }))} />
+        <div className="key-grid">
+          {SPECIAL_KEYS.filter((k) => k.group === tab).map((k) => (
+            <button key={k.code} type="button" aria-pressed={k.code === current} onClick={() => onPick(k.code)}>{k.label}</button>
+          ))}
+        </div>
+        <p className="faint" style={{ margin: 0, fontSize: 12 }}>
+          {value.length && !current ? `Replaces ${value.map(keyLabel).join(isMac ? "" : "+")}. ` : ""}These keys can't be combined with others, so pick one on its own.
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
 function PathPicker({ value, kind, onChange }: { value?: string; kind: "app" | "any"; onChange: (p: string) => void }) {
+  const [running, setRunning] = useState(false);
+  const appFilter = isMac ? ["app"] : isWindows ? ["exe", "lnk"] : null;
   const pick = async (directory: boolean) => {
     if (!isTauri) return;
     const res = await openDialog({
       directory,
       multiple: false,
       defaultPath: kind === "app" && isMac ? "/Applications" : undefined,
-      filters: kind === "app" && isMac && !directory ? [{ name: "Applications", extensions: ["app"] }] : undefined,
+      filters: kind === "app" && appFilter && !directory ? [{ name: "Applications", extensions: appFilter }] : undefined,
     });
     if (typeof res === "string") onChange(res);
   };
@@ -258,7 +304,43 @@ function PathPicker({ value, kind, onChange }: { value?: string; kind: "app" | "
       <div className="row" style={{ gap: 6 }}>
         <Button size="sm" onClick={() => void pick(false)}><FolderOpen size={12} /> {kind === "app" ? "Choose app…" : "Choose file…"}</Button>
         {kind === "any" && <Button size="sm" onClick={() => void pick(true)}><FolderOpen size={12} /> Choose folder…</Button>}
+        {kind === "app" && <Button size="sm" onClick={() => setRunning(true)}><ListChecks size={12} /> Running apps…</Button>}
       </div>
+      {running && <RunningApps onPick={(p) => { onChange(p); setRunning(false); }} onClose={() => setRunning(false)} />}
     </div>
+  );
+}
+
+/** Apps open on this computer right now, to pick one without browsing for it. */
+function RunningApps({ onPick, onClose }: { onPick: (path: string) => void; onClose: () => void }) {
+  const [apps, setApps] = useState<RunningApp[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = () => {
+    setApps(null);
+    setError(null);
+    api.runningApps().then(setApps).catch((e) => setError(errorMessage(e)));
+  };
+  useEffect(load, []);
+  return (
+    <Modal title="Running apps" icon={<ListChecks size={16} className="faint" />} onClose={onClose}
+      footer={<Button onClick={load} disabled={!apps && !error}><RefreshCw size={12} /> Refresh</Button>}>
+      {error ? (
+        <Empty icon={<AppWindow size={22} />} title="Couldn't list running apps">{error}</Empty>
+      ) : !apps ? (
+        <div className="row" style={{ justifyContent: "center", padding: 32 }}><Spinner /></div>
+      ) : !apps.length ? (
+        <Empty icon={<AppWindow size={22} />} title="No apps with open windows" />
+      ) : (
+        <div className="group">
+          {apps.map((a) => (
+            <div key={a.path} className="group-row click" role="button" tabIndex={0} title={a.path}
+              onClick={() => onPick(a.path)} onKeyDown={(e) => e.key === "Enter" && onPick(a.path)}>
+              <span className="ico"><AppWindow size={16} /></span>
+              <div className="txt"><b>{a.name}</b><span className="mono truncate">{a.path}</span></div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
   );
 }

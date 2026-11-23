@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Boxes, Check, Info, Plus, ScanSearch, Trash2 } from "lucide-react";
+import { ModuleDetails } from "../components/ModuleDetails";
 import { PRODUCTS, productKey } from "../lib/modules";
 import { ACT, api, errorMessage, on, type PushEnvelope } from "../lib/api";
 import { useApp } from "../lib/store";
@@ -31,6 +32,7 @@ export function ModulesView() {
   const s = useApp.getState();
   const [scanning, setScanning] = useState(false);
   const [found, setFound] = useState<ModuleEndpoint[]>([]);
+  const [details, setDetails] = useState<string | null>(null);
   const stopTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
@@ -111,18 +113,22 @@ export function ModulesView() {
               doc.modules.map((m, i) => (
                 <ModuleRow key={`${m.uid}:${i}`} m={m} editable online={online ? onlineMap[m.serialNumber] : undefined}
                   onRename={(name) => s.update((d) => { d.modules[i].name = name; })}
-                  action={<Button variant="ghost" icon size="sm" className="danger" title="Remove" onClick={() => s.update((d) => {
+                  action={<>
+                    <Button variant="ghost" icon size="sm" title="Details" aria-label={`Details of ${m.name}`} onClick={() => setDetails(m.serialNumber)}><Info size={14} /></Button>
+                    <Button variant="ghost" icon size="sm" className="danger" title="Remove" onClick={() => s.update((d) => {
                     const serial = d.modules[i].serialNumber;
                     d.modules.splice(i, 1);
                     // Its key setups and position go too.
                     for (const p of d.profiles) p.modules = p.modules?.filter((x) => x.serialNumber !== serial);
                     if (d.modulePlacement) delete d.modulePlacement[serial];
-                  })}><Trash2 size={14} /></Button>} />
+                  })}><Trash2 size={14} /></Button>
+                  </>} />
               ))
             )}
           </div>
         </section>
       </div>
+      {details && <ModuleDetails serial={details} onClose={() => setDetails(null)} />}
     </div>
   );
 }

@@ -1,14 +1,18 @@
+mod apps;
 mod connection;
 mod discord;
 mod discovery;
 mod icons;
 mod market;
+mod metrics;
+mod packs;
 mod pc_agent;
 mod protocol;
 mod screen;
 mod store;
 mod system;
 mod tls;
+mod typing;
 
 use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
@@ -29,6 +33,7 @@ pub struct AppState {
     conn: Mutex<Option<ConnHandle>>,
     icons: Arc<icons::IconServer>,
     pub discord: discord::Discord,
+    packs: packs::Packs,
 }
 
 impl AppState {
@@ -164,26 +169,63 @@ async fn refresh_bar_screen(state: State<'_, AppState>) -> Result<(), String> {
     screen::reload_home_screen(&ip).await
 }
 
-/// Apps in the vendor's store (the bar downloads and installs them itself).
+/// Apps in the vendor's store (the bar downloads and installs them itself),
+/// optionally matching a search.
 #[tauri::command]
-async fn store_apps() -> Result<Vec<market::StoreApp>, String> {
-    market::apps().await
+async fn store_apps(keyword: Option<String>) -> Result<Vec<market::StoreApp>, String> {
+    market::apps(keyword.as_deref()).await
 }
 
-/// Shortcut packs ("plugins") in the vendor's store.
+/// Shortcut packs ("plugins") in the vendor's store, optionally matching a search.
 #[tauri::command]
-async fn store_plugins() -> Result<Vec<market::StorePlugin>, String> {
-    market::plugins().await
+async fn store_plugins(keyword: Option<String>) -> Result<Vec<market::StorePlugin>, String> {
+    market::plugins(keyword.as_deref()).await
 }
 
-/// Downloads a shortcut pack, checks it against the catalog's hash and unpacks it.
+/// The store's latest version of an installed app (null: not in the store).
 #[tauri::command]
-async fn store_plugin_pack(
-    file: String,
-    sha256: String,
-    icon: Option<String>,
-) -> Result<market::Pack, String> {
-    market::pack(&file, &sha256, icon.as_deref()).await
+async fn store_app_latest(package: String) -> Result<Option<market::StoreApp>, String> {
+    market::latest_app(&package).await
+}
+
+/// The cloud icon library's filters (group, category, style).
+#[tauri::command]
+async fn icon_library_tags() -> Result<market::IconTags, String> {
+    market::icon_tags().await
+}
+
+/// One page of the cloud icon library.
+#[tauri::command]
+async fn icon_library_page(query: market::IconQuery) -> Result<market::IconPage, String> {
+    market::icon_page(&query).await
+}
+
+/// A picked library icon as a data URL.
+#[tauri::command]
+async fn icon_library_image(url: String) -> Result<String, String> {
+    market::icon_image(&url).await
+}
+
+/// Shortcut packs installed on this computer.
+#[tauri::command]
+fn installed_packs(state: State<'_, AppState>) -> Vec<packs::InstalledPack> {
+    state.packs.list()
+}
+
+/// Downloads a pack (checked against the store's hash) and keeps it. Also
+/// reloads or updates an installed one, given its latest store record.
+#[tauri::command]
+async fn install_pack(
+    state: State<'_, AppState>,
+    plugin: market::StorePlugin,
+) -> Result<packs::InstalledPack, String> {
+    let pack = market::pack(&plugin.file, &plugin.sha256, plugin.icon.as_deref()).await?;
+    state.packs.save(plugin, pack)
+}
+
+#[tauri::command]
+fn uninstall_pack(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    state.packs.remove(id)
 }
 
 #[tauri::command]
@@ -215,6 +257,12 @@ fn set_pc_agent_enabled(state: State<'_, AppState>, enabled: bool) -> Result<(),
 #[tauri::command]
 async fn test_pc_action(app: AppHandle, payload: Value) -> Result<(), String> {
     pc_agent::execute(&app, &payload).await
+}
+
+/// GUI apps running on this computer, for choosing an "Open app" target.
+#[tauri::command]
+async fn running_apps(app: AppHandle) -> Result<Vec<apps::RunningApp>, String> {
+    apps::running(&app.config().identifier).await
 }
 
 /// The bar's Home Assistant app reports on its own web page whether it's
@@ -284,10 +332,17 @@ async fn discord_sounds(state: State<'_, AppState>) -> Result<Vec<discord::Sound
     state.discord.sounds().await
 }
 
-/// Store a PNG icon and return the URL the bar should load it from.
+/// Store a PNG image (data URL or base64) for the bar; returns its id.
 #[tauri::command]
-fn publish_icon(state: State<'_, AppState>, data: String) -> Result<String, String> {
-    let hash = state.icons.put(&data)?;
+fn store_icon(state: State<'_, AppState>, data: String) -> Result<String, String> {
+    state.icons.put(&data)
+}
+
+/// Where the bar loads stored images from this computer:
+/// `<base><id>.png`. Used by firmware without the asset upload, and when an
+/// upload fails.
+#[tauri::command]
+fn icon_http_base(state: State<'_, AppState>) -> Result<String, String> {
     let port = state.icons.port();
     if port == 0 {
         return Err("The icon server isn't running".into());
@@ -300,7 +355,23 @@ fn publish_icon(state: State<'_, AppState>, data: String) -> Result<String, Stri
         .clone()
         .or_else(lan_ip)
         .ok_or("Couldn't determine this computer's network address")?;
-    Ok(format!("http://{ip}:{port}/i/{hash}.png"))
+    Ok(format!("http://{ip}:{port}/i/"))
+}
+
+/// Replace this app's images on the bar (launcher 1.0.9+) with the given
+/// stored ones. They're then reachable as `file://ultrabar-app/image/<id>.png`.
+#[tauri::command]
+async fn upload_bar_images(state: State<'_, AppState>, ids: Vec<String>) -> Result<(), String> {
+    let ip = state
+        .status
+        .lock()
+        .unwrap()
+        .bar
+        .as_ref()
+        .map(|b| b.ip.clone())
+        .ok_or("No bar selected")?;
+    let zip = state.icons.zip(&ids)?;
+    screen::upload_images(&ip, &zip).await
 }
 
 /// Export/import of the layout file at a path the user picked in a dialog.
@@ -334,6 +405,15 @@ fn lan_ip() -> Option<String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Registered first so a second launch exits before setting anything
+        // up. It brings this window to the front instead.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
@@ -358,6 +438,7 @@ pub fn run() {
                 conn: Mutex::new(None),
                 icons,
                 discord: discord::Discord::new(dir.clone()),
+                packs: packs::Packs::new(dir.join("packs")),
             });
 
             // Reconnect to the last bar on launch.
@@ -383,12 +464,19 @@ pub fn run() {
             refresh_bar_screen,
             store_apps,
             store_plugins,
-            store_plugin_pack,
+            store_app_latest,
+            installed_packs,
+            install_pack,
+            uninstall_pack,
+            icon_library_tags,
+            icon_library_page,
+            icon_library_image,
             load_doc,
             save_doc,
             set_allowed_actions,
             set_pc_agent_enabled,
             test_pc_action,
+            running_apps,
             ha_logged_in,
             discord_status,
             discord_set_app,
@@ -397,7 +485,9 @@ pub fn run() {
             discord_check,
             discord_voice_channels,
             discord_sounds,
-            publish_icon,
+            store_icon,
+            icon_http_base,
+            upload_bar_images,
             write_json_file,
             read_json_file,
         ])

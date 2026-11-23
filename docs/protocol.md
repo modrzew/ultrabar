@@ -213,10 +213,10 @@ The bar also sends requests the other way. `data = {"type": …, "payload": …}
 
 | `type` | What the official app does |
 |---|---|
-| `TEST` | replies 200 |
+| `TEST` | replies 200 with the request's `data` echoed back |
 | `PC_CONTROL` | `payload.action` ∈ `execCmd {cmd}`, `openFile {path}`, `openBrowser {url}`, `startApp {path, launchMode}`, `inputText {text}`. **It really runs them.** |
-| `SET_VOLUME` / `GET_VOLUME`, `SET_MUTE` / `GET_MUTE`, `SET_BRIGHTNESS` / `GET_BRIGHTNESS` | Changes or reads system audio/display (DDC/CI via dxva2 on Windows) |
-| `CPU`, `MEMORY`, `STORAGE`, `NETWORK` | Replies with usage numbers (`totalReceived` / `totalSent` for network) |
+| `SET_VOLUME` / `GET_VOLUME`, `SET_MUTE` / `GET_MUTE`, `SET_BRIGHTNESS` / `GET_BRIGHTNESS` | Changes or reads system audio/display (DDC/CI via dxva2 on Windows). The `GET_*` replies are `{type, payload}` with an int (volume, brightness) or a bool (mute). The `SET_*` requests get no reply. |
+| `CPU`, `MEMORY`, `STORAGE`, `NETWORK` | Replies with usage numbers (`totalReceived` / `totalSent` for network). See "System cards" under "Official desktop app features". |
 
 If your bridge doesn't run a PC agent, **reply with a 200/empty payload or ignore these**. The system-stat and PC-control widgets just won't do anything.
 
@@ -235,7 +235,7 @@ If `config` is true, the official app shows a "Web UI" button that opens `http:/
 
 ## 9. HTTP endpoints (port 8080) **[C]**
 
-- `POST http://<ip>:8080/upload/zip`: `multipart/form-data`, one part `name="file"; filename="core_bar_assets.zip"`, `Content-Type: application/octet-stream`. The zip contains `image/<id>.png`. The reply is JSON `{"state": <int>, "msg": "…"}`. The exact success value of `state` isn't known yet **[I]**. Whether the zip includes a top-level `CoreBarAssets/` folder depends on a pack-mode flag I haven't decoded **[I]**.
+- `POST http://<ip>:8080/upload/zip`: `multipart/form-data`, one part `name="file"; filename="core_bar_assets.zip"`, `Content-Type: application/octet-stream`. The reply is JSON `{"state": <int>, "msg": "…"}`, and the official app checks `state == 200`. Its zip holds `image/<name>.png` at the root (pack mode 1, no `CoreBarAssets/` folder). Launcher 1.0.9 takes `subDir` and `isFull` too; see "Card images on the bar" below.
 - `POST http://<ip>:8080/upload?serialNo=<module SN>`: same multipart format, file `config.tgz`. Used for VivoCube module screen layouts.
 - No auth on these is visible in the client code. Don't expose them beyond your LAN.
 
@@ -247,7 +247,7 @@ The app also calls `https://gatewayssl.dev.aiks360.com/api/v1/base-service/pub/.
 
 1. ~~Discovery reply format~~ confirmed (section 2). The command port was 7431 on this bar, but it may change, so always take it from discovery.
 2. Reply payloads for `1000`, `1002`, `1205`, `30700`. These read-only queries would answer most of the [I] items above.
-3. `state` success value from `/upload/zip`. Is the zip uploaded **before** or **after** `1108` taking effect? (The app uploads last.)
+3. ~~`state` success value from `/upload/zip`~~ 200 (see "Card images on the bar"). The official app uploads last, after `30500`; this app uploads first.
 4. Whether a minimal `1108` (one profile with a `TIME` widget) is accepted without the earlier `30300` step.
 
 ---
@@ -483,6 +483,13 @@ The launcher wraps pushes in an internal envelope that hub 1.0.1 doesn't know (`
 ```
 No top-level `act` or `id`. Reply to the inner envelope as before (`act 1000000`, its `id`, `code 200`); the launcher waits 5 s for that ack **[code]**. A future hub update may forward the inner message directly, so accept both forms. `PushType` also gained `METRIC`, `MODULE_STATE` and `CPU/MEMORY/STORAGE/NETWORK` **[code]**.
 
+System cards poll the computer while they're on screen (`MetricsBus`, `ScheduledQueryRegistry`) **[code]**:
+- **Intervals:** `CPU` every 3 s, `MEMORY` every 8 s, `NETWORK` every 5 s, `STORAGE` every 10 s. The first query goes out as soon as the card subscribes (`scheduleWithFixedDelay`).
+- **Pushes:** each one is `{type: "CPU"|…, payload: null}`. The launcher reads the reply's `data.payload`.
+- **Percent cards:** read with `getIntValue` (null reads as 0, so the gauge drops to 0%) and `getInteger` for the system provider (null throws, which the launcher catches).
+- **Network card:** reads `payload.totalReceived` and `payload.totalSent` as longs.
+- `PushType` has `TEST` but nothing sends it, and there is no `GET_MUTE`/`SET_MUTE`.
+
 ## Widgets (`1108`)
 - `WidgetType` dropped `COMPUTER_INFO`, `HOT_KEY` and **`SET`**; unknown types render as an "unsupported widget" card ("Not available"). Added `CPU`, `MEMORY`, `STORAGE`, `NETWORK`, `HOT_KEY_GROUP`, `PC_BOOT`, `SENSE_CUBE*`.
 - Params now go through per-type converters (`WidgetCoverRegistry`). `PC_CONTROL` cards are **fixed**: tapping runs the action. They **ignore `bgColor`**; the icon (`getScaledBitmap(265, 265, icon, iconScale/100)` after trimming transparent borders) is all there is, so this app sends a full-card image (520×480, color + symbol) with `iconScale: 100`.
@@ -493,9 +500,9 @@ No top-level `act` or `id`. Reply to the inner envelope as before (`act 1000000`
 After `1108` the launcher no longer redraws the home screen, and `1103` is ignored when the requested profile is already current (also right after a launcher restart, when the current profile is the default one). A redeploy of the visible profile therefore leaves the old cards on screen. `POST :8080/upload/zip` is back (multipart `file` = a `.zip`, query `subDir`, `isFull`) and always triggers a full home-screen reload. **Always pass `subDir`**: `isFull` defaults to `true` and empties the target folder, which without `subDir` is the launcher's whole asset folder. This app uploads an empty zip to `subDir=ultrabar-app&isFull=false` after each deploy (reply `{"msg":"ok","data":0,"state":200}`).
 
 ## Action catalog (`1205`)
-- Root gains `PLUGIN_WIDGET` (no action behind it) and a stray `{"id":"corebar.volume", …}` slider with no name or type (a launcher bug).
+- Root gains `PLUGIN_WIDGET` (no action behind it; the desktop app's pack-button picker, see "Plugins") and a stray `{"id":"corebar.volume", …}` slider with no name or type (a launcher bug).
 - `sc.corebar` → `BRIGHT` (id now `corebar`, was `bright`) and new `VOLUME` (id `corebar`, value `corebar.volume`, 1–100).
-- `sc.other` → `ACTIVITY`, `SOUND_SCAPE` (only with the whitenoise app) and `APP_CAPABILITY` (only with plugin apps). **Timer is no longer listed** (the method exists but isn't called), yet `TimerAction` still runs: `{id:"timer", type:"TIMER", values:[{id:"1", value:<timer widget id>}, {id:"2", value:"START|PAUSE|RESUM|CANCEL|RESTART"}]}` works from multi-action cards and automations.
+- `sc.other` → `ACTIVITY`, `SOUND_SCAPE` (only with the whitenoise app) and `APP_CAPABILITY` (only while an app with actions runs; see "App Capability actions"). **Timer is no longer listed** (the method exists but isn't called), yet `TimerAction` still runs: `{id:"timer", type:"TIMER", values:[{id:"1", value:<timer widget id>}, {id:"2", value:"START|PAUSE|RESUM|CANCEL|RESTART"}]}` works from multi-action cards and automations.
 - `sc.devices` adds `sc.devices.vivo`, `sc.devices.pcboot`.
 - Actions still dispatch on `type` and component ids, so actions saved with the 1.0.1 node ids keep working.
 
@@ -545,7 +552,7 @@ Discovery now reports `ver: "1.0.9(9)"` (the hub was 1.0.1). The update cleared 
 
 ## Module keys (profile `module` list in `1108`) **[code]**
 Each profile's `module` array holds `{productId: "DOT_KEY"|"KNOB_KEY"|…, serialNo, config}` (product by name or number). The launcher matches `serialNo` against the stored gateway endpoints, so the module must already be in the bar's config.
-- **Dot Key**: `config` = `[{keyCode, singleClick?, doubleClick?, longPress?}]`. Each gesture is a scene: `{name, icon?, show, actions: [ActionConfig]}` (the same actions as multi-action cards). With `show: true` the bar briefly shows `name`/`icon` when it runs. The official app's drawing maps `button1` (top left, round) → key code **2**, `button2` (bottom left, round) → **1**, `button3` (right, tall) → **0**. Confirmed on the bar: all three keys and all three gestures arrive with these codes.
+- **Dot Key**: `config` = `[{keyCode, singleClick?, doubleClick?, longPress?}]`. Each gesture is a scene: `{name, icon?, show, actions: [ActionConfig]}` (the same actions as multi-action cards). With `show: true` the bar briefly shows `name`/`icon` when it runs (for 800 ms; see "Gesture prompt"). The official app's drawing maps `button1` (top left, round) → key code **2**, `button2` (bottom left, round) → **1**, `button3` (right, tall) → **0**. Confirmed on the bar: all three keys and all three gestures arrive with these codes.
 - **Knob**: `config` = `{button?: {keyCode: 0, singleClick?, …}, clockwise?: {id, type}, counterclockwise?: {id, type}}`. The first turn's direction picks `clockwise` or `counterclockwise`. Further turns either way adjust that target (right = up) until the knob rests for 3 s.
 - Confirmed on the bar: the Knob's press is key code 0 (click, double click, hold), and `counterclockwise: local:bright` changes the bar's brightness.
 - A module the bar has forgotten still shows up in a scan but stays `online: false` in `30730`. Sending `30300` with it (and every other module) brings it back, `online: true` within seconds.
@@ -556,6 +563,8 @@ Each profile's `module` array holds `{productId: "DOT_KEY"|"KNOB_KEY"|…, seria
 ## Knob → computer pushes **[code]**
 A knob bound to `pc:volume` or `pc:bright` pushes `{type: "SET_VOLUME"|"SET_BRIGHTNESS", payload: <0–100>}`. While bound, it polls `GET_VOLUME`/`GET_BRIGHTNESS` every 5 s and expects reply `data` = `{type, payload: <int>}`.
 
+Nothing on the bar pushes `GET_MUTE` or `SET_MUTE` to a computer. Those strings in launcher 1.0.9 and the hub belong to the Sonos and Spotify integrations (`setMute(boolean)` to the speaker).
+
 ## Home Assistant **[code]** / live
 - The bar's Home Assistant support is a separate store app, `com.ultrabar.homeassistant` (1.0.4). Without it the launcher drops `1010` for that package **without replying**. The launcher binds to the app's `IOTService` every 5 s until it's installed.
 - `1010` passes `{url, token}` to the app over IPC. The app builds its websocket address as `url.replace("http", "ws") + "api/websocket"`, so the URL needs a scheme and a **trailing slash**.
@@ -563,6 +572,312 @@ A knob bound to `pc:volume` or `pc:bright` pushes `{type: "SET_VOLUME"|"SET_BRIG
 - The app's web server (port from `1000`, `config: true`) answers `GET /status` with `{"status":"success","data":<logged in>}` without a session token.
 - Home Assistant scene cards are `SCENE` widgets with the entity id and `param: {type: "HA_SCENE"}`.
 - An address behind Cloudflare Access (or any login page) can't work: the websocket upgrade gets a 302 to the login page.
+
+# Official desktop app features (V1.0.1.0, 2026-11-22)
+
+Read from the official app's macOS build (x86_64 slice, symbols intact), and checked against the Windows build. **[C]** means read from that code. **[I]** means inferred, so check it on a bar first. The app sends no opcodes beyond those listed above. What's new here is how it uses them. The gap list against this app is in `official-app-gaps.md`.
+
+## Builds
+- Windows and macOS have the same feature classes. Only the OS layer differs:
+  - **Windows:** text pasted through the clipboard (see "Type text"), CPU from PDH, network from `GetIfTable2`/`GetIfEntry2`, brightness over DDC/CI (`dxva2`) with a WMI fallback, apps found via ToolHelp and `EnumWindows`, and `.exe`/`.lnk` files in the app picker.
+  - **macOS:** apps brought forward with AppleScript `activate`.
+- Bar pushes go through `CBCmdUseCase::onReceiveMessage`:
+  - `TEST` is answered with code 200 and the request's own `data`.
+  - `PC_CONTROL` runs the action.
+  - The other types go to `OSCtrlUseCase::onReceiveMessage2`, which replies only to `GET_*` and the system-card types.
+- The bundled `libusb-1.0.dll` and `Qt6SerialPort.dll` are never imported, so the app has no USB or serial link to the bar. **[C]**
+
+## Module products **[C]**
+`productId` names: `0x10000001` `DOT_KEY`, `0x10000002` `KNOB_KEY`, `0x10000003` `VIVO_CUBE`, `0x10000004` `SENSE_CUBE`, `0x10000005` `PC_BOOT` (this app calls it `PC_POWER_CARD`). Default names: "Dot Key", "Knob Key", "Vivo Cube", "Sense Cube", "PC Boot".
+
+## Adding, replacing and inspecting modules **[C]**
+- The device list menu has **Config**, **Detail**, **Replace** and **Delete**.
+- Adding a module:
+  - The add dialog scans with `30100` (`"can"` for pogo-pin "QuantumLink" modules, `"mesh"` for wireless ones). It lists the modules found with an "Added" column.
+  - The app picks a free `netId` itself ("Module exceeds count limit" when none is left), then sends `30300` **right away**, not on the next project deploy.
+  - Mesh devices are paired one by one with `30103 {sn, address}`. The result arrives per serial as `{serialNumber, errorCode}`. Error texts: gateway busy, network configuration timeout/failed, AppKey configuration timeout/failed, pairing timeout.
+- **Replace** scans the same way and swaps in the new module's `sn`/`netId` (pairing first for mesh). It keeps the old module's name and per-profile config, then sends `30300`.
+- **Details** (`ModuleDetailsDialog`) shows:
+  - Name, with rename.
+  - ProductId as the product's name (`DOT_KEY` … `PC_BOOT`; empty for unknown ids).
+  - Device ID, which is the module's serial number.
+  - Net ID in decimal.
+  - "App Ver", read when the dialog opens with `30200` `{serialNo: <sn>, deviceId: 0, propertyId: 5, extra: null}`. The reply needs code 200, and its `data.result` is shown as a string as is.
+  - The OTA button (out of scope here).
+- `30200` in general is `CoreBarApi::readProperty(serialNo, deviceId, propertyId, extra)`. An empty `extra` goes out as JSON `null`, and the reply value is `data.result`. The VivoCube reads use the same call: Wi-Fi config is `deviceId 256, propertyId 7` (`result` is a hex string), and Wi-Fi state is `deviceId 256, propertyId 6` (`result` is an int).
+- What a module actually returns for property 5 hasn't been seen yet; the official app only requires a JSON string.
+
+## Gesture prompt (Dot Key, Knob press, VivoCube buttons, Sense Cube taps) **[C]** / **[code]**
+Every gesture editor has an **Enabled** switch and a "Prompt Dialog" section above the action list.
+
+- **Official defaults (2026-11-23):**
+  - Enabled and the prompt are both on for a new gesture: `value("enabled", true)` and `value("promptEnabled", true)`.
+  - The prompt text defaults to the panel's title `"%1-%2"`: the translated key name, then the gesture. Examples: "Button1-Click" (Dot Key keys are Button1–3), "Button-Long Press" (Knob).
+  - The text field has no placeholder and holds at most 64 characters (`setMaxLength(64)`). It's trimmed on save. Empty text is allowed, even with the prompt on.
+  - Turning the prompt off only greys out its fields. Their values are kept and still sent.
+- **Stored per gesture:** `enabled`, `promptEnabled`, `promptText`, `promptDialogBg`, `actionList`.
+- **Sent per gesture:** `{actions: [deployData…], name: promptText, show: promptEnabled, icon: promptDialogBg}`, with nothing else.
+  - `name` is the saved text even with the prompt off, and `""` when empty.
+  - `icon` is always present, `""` without an image.
+  - A switched-off gesture, or one without actions, isn't sent: its key is absent. A key with no gestures left is left out. The Knob's `button` is `{keyCode: 0, …}`.
+- **Picture:** only the cloud picker (the "Icon" and "Background" tabs), plus "Clear" from a right-click menu. There's no local file and no zoom. `promptDialogBg` is the cloud icon's `path` URL, sent as is (not in the deploy zip). The app keeps a copy (trimmed of transparent edges) only for its own preview.
+- **On the bar [code]** (launcher 1.0.9 `SceneDialog`, layout `scene_dialog`):
+  - The prompt is a full-screen overlay (80% black) with a 625 dp wide card.
+  - On the card's left is the picture: an `ImageFilterView` 200 dp wide and as tall as the card (the screen minus 80 dp, so most likely 200 dp; the screen height isn't confirmed). It has 40 dp rounded corners and `scaleType` fitXY, so the picture is **stretched, not cropped**.
+  - The picture loads through `GlideExtend.loadSmartAsBitmap` (http(s), `file://`, files under the launcher's folder). `BitmapTrimUtil.trimTransparentBorder(bmp, 1)` first cuts away the border of pixels with alpha ≤ 1. A fully transparent picture shows nothing.
+  - To its right, `name` is shown at 35 dp, white, on one line ending in "…", over a fixed "Running".
+  - The prompt closes after **800 ms**. A gesture that runs in that time reuses it and restarts the timer; a missing `icon` then keeps the previous picture. Tapping closes it early.
+  - `show` is checked in `SceneTool$1.onStart`. When it's false only the key sound plays. Without `show`, fastjson's `ClickEvent` default is true.
+  - Nothing reads an `enabled` field on module gestures. A gesture without `actions` isn't registered, and pressing it does nothing (no sound, no prompt).
+- **This app:**
+  - Each gesture has an On switch (stored only when off) and a prompt with a switch, text and picture. A switched-off gesture isn't sent, its computer actions stay out of the allowlist, and deploy checks skip it.
+  - Empty text sends the first action's name (cut at 40 characters), as earlier versions always did, rather than the official "Button1-Click".
+  - Layouts saved before this change had a bare action list per gesture. They load as gestures with nothing else set, deploy exactly as before (shown, named after the first action) and keep their "deployed" state.
+  - The picture comes from a file or the cloud library (the phase 2 picker). It's prepared at 200×200: a file is center-cropped to fill it, and a library icon is centered at 80%. Two corner pixels get alpha 2 (invisible) so the launcher's trim keeps the whole square and doesn't stretch the rest. It goes to the bar like card images (`file://ultrabar-app/image/<hash>.png`, see "Card images on the bar"). It's only sent while the prompt is on.
+  - `icon` is left out rather than sent empty.
+
+## Sense Cube **[C]**
+- **Per-profile module config:** `{"tap": [{mode, name, show, icon, actions}, …]}`.
+  - `mode` 0–4 picks one of five preset tap rhythms (`mode1`…`mode5` in the UI, each with an animated preview and a Play button).
+  - Only enabled rhythms are listed.
+  - Firmware V2 changed the arming gesture to tap, pause, double tap (release notes).
+- **Cards** (palette group "Module"): `SENSE_CUBE` (temperature and humidity), `SENSE_CUBE_TEMP`, `SENSE_CUBE_HUM`, `SENSE_CUBE_ALS` (light), `SENSE_CUBE_AUDIO` (sound level) and `SENSE_CUBE_RADAR` (presence). Each is `{id, type, name, param: {uid: <module uid>}}`. The editor has Name plus a picker for which Sense Cube.
+
+## PC Boot card **[C]**
+Card `{id, type: "PC_BOOT", name, param: {uid}}`, with Name plus a picker for which PC Boot module. The bar's action tree also has `sc.devices.pcboot`.
+
+## VivoCube (screen module) **[C]** / **[I]** for the tarball layout
+- **Network tab:**
+  - Reads and writes the cube's Wi-Fi with `30200`/`30201`, `deviceId` 256 and `propertyId` 7 (the order of those two args is **[I]**). The value is hex-encoded `ssid` + `password` (144 bytes).
+  - "Search" uses `1633`/`1634`. Results show 2.4 GHz networks with a 0–4 signal level.
+  - The config is also stored as `extraConfig.netConfig` and sent with `30300`.
+- **Layer and Widget tab:**
+  - Layers can be added, renamed, deleted and set as default (`defaultLayer`), up to a maximum count.
+  - Each layer holds widgets of type **Button** or **Toggle**, with a name and pressed/unpressed icons (zoom, cloud picker).
+  - "Deploy" converts the images to LVGL `.bin`, packs a `config.tgz` (paths `widget/<id>/…`, `profile/<pid>/widget/<id>…`) and POSTs it to `http://<bar>:8080/upload?serialNo=<cube sn>`. Upload errors: "VivoCube is currently busy", "VivoCube is not connected to the network".
+- **Per profile:** Click, Double Click and Long Press on each widget, using the same prompt and action editor.
+- **Action `VIVO_CUBE_TOGGLE`:** pick cube → layer → widget. It sends `values: [{id: "1", …}, {id: "2", …}]`.
+
+## System cards **[C]**
+- `CPU`, `MEMORY`, `STORAGE`, `NETWORK` ("CPU Usage", "Memory Usage", "Storage Usage", "Network Speed") have no settings. They sit at the top of the palette's "PC Control" group.
+- Each is a `CoreBarCardPCCtrl` whose `extCmd` is the type. Its deployData is `{id, type, name, icon, iconScale}`, and `icon` is the card's image.
+- **On the bar [code]:** the holders don't read `name` or `icon`.
+  - `CPU`, `MEMORY` and `STORAGE` draw a ring gauge with the percentage over a dark background. The labels are fixed: "CPU", "Mem", "SSD".
+  - `NETWORK` shows download and upload speed (Δbytes / 1024 / Δseconds, as KB/s and up) over a speed chart. A counter that goes down shows a negative speed once; nothing clamps it.
+- **Replies:** the app answers `{type, payload}` (see "Firmware 1.0.9" for the polling).
+  - `CPU` is an int capped at 100.
+  - `MEMORY` and `STORAGE` are ints, negative values (errors) sent as 0.
+  - `NETWORK` is `{totalReceived, totalSent}` as unsigned 64-bit byte counters.
+- **What each number is:**
+
+| | macOS | Windows |
+|---|---|---|
+| CPU | `host_statistics(HOST_CPU_LOAD_INFO)` sampled every 1 s by a background thread: (user + system + nice) / all ticks, rounded down | PDH `\Processor Information(_Total)\% Processor Utility` (added with `PdhAddCounterW`, the localized-name API), sampled every 1 s, `PDH_FMT_LONG` |
+| Memory | (active + wired + compressor pages) × page size / `hw.memsize`, rounded | `GlobalMemoryStatusEx`: (total − available) / total, rounded (`dwMemoryLoad` isn't used) |
+| Storage | the volume at `/`: (total − "available for important usage") / total | every drive letter from `GetLogicalDrives`, with no drive-type filter (removable and network drives count): Σ(total − `TotalNumberOfFreeBytes`) / Σ total, sampled every 3 s |
+| Network | `getifaddrs`, link-level entries that are up, not loopback and not `utun*`, summing the 32-bit `ifi_ibytes`/`ifi_obytes` (they wrap at 4 GiB) | only the interface `GetBestInterface` picks for 8.8.8.8, chosen once at startup; `InOctets`/`OutOctets` from `GetIfEntry2` every 1 s. If the computer starts offline, both stay 0. |
+
+- **Mute:** `GET_MUTE` replies with a bool. `SET_MUTE` reads its payload as a JSON boolean (nlohmann `from_json`, which throws on a number).
+  - macOS uses CoreAudio's mute property on the default output device.
+  - Windows uses `IAudioEndpointVolume::GetMute`/`SetMute` on the default render endpoint.
+- **This app:** the same numbers, with these differences.
+  - The macOS network counters come from sysinfo, which reads 64-bit counters, so they don't wrap.
+  - The Windows CPU counter is added by its English name, which works on any display language, and falls back to `% Processor Time`.
+  - The Windows network interface is picked again on every request.
+  - CPU is only sampled while the bar keeps asking, so the first reply after a pause is null.
+  - Readings need "Let the bar control this computer". Otherwise the reply is null.
+
+## Hotkeys **[C]** / **[code]**
+- Hotkeys are `{output: 5, keys: [...], keysDesc}`, and `keys` uses one 16-bit code space:
+  - Keyboard usages are used as is (`4` = A …).
+  - Consumer keys are **10000 + usage**.
+  - System keys are **20000 + usage**.
+- **The official selector** (`HotKeySelector`, table `HidKeyboardDef`) is one window: a full keyboard and numpad, with Mute, Vol−, Vol+ and Power at the top right. Below it are four groups:
+
+| Group | Keys (code name) |
+|---|---|
+| System Keys | 20129 Power, 20130 Sleep, 20131 Wake, 10111 Brightness+, 10112 Brightness-, 10177 Display Toggle |
+| Media Keys | 10182 Previous, 10181 Next, 10205 Play/Pause, 10183 Stop, 10180 Rewind, 10179 Fast Forward, 10233 Volume+, 10234 Volume-, 10226 Mute |
+| Application Keys | 10394 Mail, 10402 Calculator, 10387 MediaPlayer, 10404 MyComputer, 10545 Search |
+| Browser Keys | 10548 Back, 10549 Forward, 10551 Refresh, 10550 Stop, 10545 Search, 10546 Favorites, 10547 Home |
+
+  - Picking a consumer or system key clears the combination first, so it's always alone. Picking a normal key clears a consumer or system key. Normal keys combine, up to 5. "Finish" replaces the whole combination.
+  - The live recorder (`HotkeyHidTable`) has no consumer keys.
+- **`keysDesc`** is `"[" + name + "]"` joined with `" + "`, e.g. `[Ctrl] + [Shift] + [A]` or `[Volume+]`. Only the hotkey editor writes it. On loading, the editor rebuilds it from `keys` using the keys' short labels.
+  - **Nothing on the bar reads `keysDesc` [code]**: neither launcher 1.0.9 nor hub 1.0.4 contains the string.
+- **On the bar [code]:**
+  - The launcher passes `keys` to the hub unfiltered from cards, shortcut-group buttons and actions.
+  - Hub 1.0.4's `HidKeyboardOut.sendKeys(int[])` sends only the **first** key of 10000 or more, ignoring every other key, modifiers included. Other codes are cut to a byte, so 256–9999 type a wrong key.
+  - `sendSystemOrConsumerKey` maps codes to bits of its own reports:
+    - **Consumer:** report 2, `[0x02, b1, b2, b3]`. b1: 10111, 10112, 10182, 10181, 10205, 10183, 10180, 10179. b2: 10233, 10234, 10226, 10394, 10402, 10387, 10404, 10545. b3: 10548, 10549, 10551, 10550, 10546, –, 10547.
+    - **System:** report 3, `[0x03, bits]`. 20129 = 0x01, 20131 = 0x02, 20130 = 0x04. 10177 is sent as `[0x03, 0x08]` on the system report.
+    - Any other code is logged as unknown and nothing is sent.
+  - `mIsNewFwVersion` is true when `/dev/hidg0` is dated 2026-08-01 00:00 (the bar's time zone) or later, or has no date. Only the keyboard report depends on it: 9 bytes with report id 1 when true, 8 bytes without an id when false. Consumer and system reports are written the same either way.
+  - Whether the older USB gadget (keyboard report without an id) accepts reports 2 and 3 **can't be told from the APK [I]**. Releasing keys always writes them too.
+  - A tap is press, then release after 15 ms. A tap that arrives while one is in progress is ignored.
+- **This app:**
+  - Next to the recorder, a "Media and system keys" picker has the same keys in four tabs (Media, System, Apps, Browser, grouped as above). Picking one replaces the shortcut.
+  - The editor notes that bars with base firmware from before August 2026 may not send these keys.
+  - `keysDesc` isn't sent, to save room in the 8 KB line.
+  - Store packs may use the supported special keys. A pack button combining one with other keys is reduced to that key alone, which is what the bar sends.
+
+## Start App **[C]**
+- **Editor:** "Launch Mode:" with two exclusive checkboxes. **"Single Instance" is checked by default and saves `launchMode: 2`**; "New Instance" saves `0`.
+- **Handler:** reads `launchMode` with `json::at`, so it's required. It runs `startApplication(path, launchMode != 0 ? 2 : 0)`. Mode 1, "activate only, never launch", exists internally but the bar can't ask for it.
+- **macOS:**
+  - **Mode 0:** `open "<path>"`. That also just activates an app that's already running, so on macOS the two modes behave alike.
+  - **Mode 2:** finds the running app by the bundle's identifier (`NSRunningApplication`) and runs AppleScript `tell application id "…" to activate`. Otherwise it runs `open`.
+- **Windows mode 0:** `cmd.exe /C start "" "<path>"` (`CreateProcessW`, `CREATE_NO_WINDOW`).
+- **Windows mode 2:**
+  1. A `.lnk` is resolved with `IShellLinkW::GetPath` (no `Resolve`).
+  2. Running copies are found with ToolHelp and `QueryFullProcessImageNameW`, comparing the full path case-insensitively.
+  3. The first visible, titled window without an owner is brought forward: `ShowWindow(SW_RESTORE)` if minimized, then `AttachThreadInput` to the foreground thread, `SetForegroundWindow` and `BringWindowToTop`.
+  - If the app runs but has no such window (tray only), nothing happens.
+  - If the app isn't running, it starts like mode 0.
+  - Its file dialog keeps forward slashes, so an `.exe` picked there probably never matches a running process **[I]**.
+- **"Running List"** fills the path:
+  - **macOS:** `NSWorkspace.runningApplications` with an `.app` bundle, skipping `LSUIElement`/`LSBackgroundOnly` apps and itself.
+  - **Windows:** visible windows with a title (`EnumWindows`), mapped to the process path with `K32GetModuleFileNameExW`.
+  - The "Running Apps" dialog drops duplicate paths and anything named "UltraWorkSpace", and shows each file name without its extension.
+
+## Type text **[C]**
+- **Windows:** puts the text on the clipboard (`CF_UNICODETEXT`) and sends Ctrl+V with one `SendInput` call.
+  - Line breaks and tabs are pasted as they are; LF isn't turned into CRLF.
+  - The old clipboard isn't restored.
+- **macOS:** types the text through System Events.
+
+## App Capability actions (`30750`–`30752`) **[C]** / **[code]**
+- **Which apps [code]:** an app offers actions when it has a service with the meta-data `ultrabar.plugin`.
+  - The launcher starts it (`startForegroundService`), and the app connects back to `127.0.0.1:39001` with JSON messages (`register`, `actions`, `describe`, `get_options`, `call`, `heartbeat`).
+  - Only actions with the CALL feature (bit 1) are offered.
+- **The node [code]:** `1205` with `"sc.other"` lists one node, or none when no running app has a CALL action:
+  `{parentId: "sc.other", id: "capability", name: "App Capability", objectName: "App Capability", type: "APP_CAPABILITY", last: true, components: [{id: "1", name: "App", uiType: "SELECT", inputType: "STR", options: [{label: <app name>, value: <packageName>}]}]}`. The official app takes its app list from these options and picks the first app.
+- **`30750` [code]:** `data` is the bare package name. The reply is `[{actionId, name, description, features}]`. Without a running app it fails with `no active session for packageName=…`.
+- **`30751` [code]:** `{packageName, actionId}`. The reply is `[{id, name, type, placeholder, required, maxLength, dependsOn: [id…], options: {provider, items: [{label, value}], searchable}}]`.
+  - `type` is one of `TEXT`, `TEXTAREA`, `NUMBER`, `BOOLEAN`, `SELECT` or `MULTI_SELECT`.
+  - `provider` is `STATIC` or `REMOTE`.
+- **`30752` [code]:** `{packageName, actionId, describeId, searchText, cursor, limit, params}`. The launcher's default `limit` is 10.
+  - The reply is the app's own answer: `{success, error?, items: [{label, value}], nextCursor, hasMore}`.
+  - An app error arrives as a normal reply with `success: false` and `error: {code, message, …}` (e.g. `MISSING_PARAM`).
+- **Official requests [C]:**
+  - `30750` `"<pkg>"`, then `30751` `{actionId, packageName}`.
+  - `30752` is `{actionId, packageName, describeId: <param id>, cursor, limit: 20, params}`, with no `searchText`. `cursor` is `""` for the first page and `nextCursor` for "More". `params` holds **only** the values of the `dependsOn` ids. "More" sends `{}`, which looks like a bug.
+  - A param whose dependencies aren't all set isn't loaded. Changing a param clears the ones that depend on it.
+  - Only `TEXT` is a text field; every other type is a list.
+  - Values are strings. Empty ones are left out.
+- **Official action [C]:** `{id: "capability", type: "APP_CAPABILITY", values: [{id: "1", value: "<JSON text>"}]}`, with no `name`.
+  - The value is `{actionId, packageName, params}` written as a **string** (compact, keys sorted).
+  - `configDesc` is `"App Capability: <app> -> <action>"`, plus `" (name=value; …)"` when there are params.
+- **On the bar [code]:** `AppCapabilityAction.execute` reads value `"1"` **as a string** (`getValueToStr`) and parses it into `{packageName, actionId, params}`. An object fails with a `ClassCastException`.
+  - Params are passed to the app as they are; the app checks required ones (`MISSING_PARAM`).
+  - If the app isn't running, the action never finishes (no `onComplete`, no `onError`).
+- **This app:** the same flow and requests. The differences:
+  - `TEXTAREA` gets a multi-line field and `NUMBER` a number field.
+  - A `BOOLEAN` without its own list gets Yes/No (`"true"`/`"false"`). What such an app expects hasn't been seen **[I]**.
+  - `MULTI_SELECT` picks one value, as in the official app.
+  - "More" sends the dependency values again.
+  - The action stores the app, action and param names and labels, so it reads the same offline. The summary is "<app> → <action> (name: value; …)".
+  - Deploy checks flag an app action whose app isn't on the bar.
+
+## Plugins (shortcut packs) **[C]**
+- An installed pack adds a palette group with the whole pack as a `HOT_KEY_GROUP` card ("Shortcut Group": Name and Icon only) and **every button as its own draggable `PC_CONTROL` card**.
+  - `CBPluginWidgetItem` reads the button's `name`, `icon`, `iconScale` (50 if missing) and `param`.
+  - The button's `type` and `spanSize` are ignored.
+  - `output` 5 becomes a hotkey. `output` 10 with `inputText`, `openBrowser`, `openFileOrFolder` or `execCmd` becomes that action. Anything else throws "unknown widget type".
+- **The `PLUGIN_WIDGET` action** picks an installed pack (`pluginType` 0), then any of its buttons, unfiltered.
+  - It becomes `{type: "PC_CONTROL", values: [{id: "1", value: <button param, unchanged>}]}`, with no `id` or `name`, and `configDesc` "Plugin: <pack>/<button>".
+  - It doesn't record which pack or button it came from.
+  - On the bar it's only a root node of `1205` (`{id: "1", name: "Plugin", objectName: "Corebar", type: "PLUGIN_WIDGET", last: true}`). Nothing on the bar runs that type **[code]**.
+- **Install** keeps the pack in the project database: a `json_store` row with `type "plugin"`, the identifier, `pluginType`, the store columns and `config.json`, plus the zip as a blob. The zip is unpacked into `<data>/plugin/<…>/` when used.
+  - The catalog's `sha256` is read but **never checked**; the binary has no hashing code.
+  - There are no update checks: the store only switches "Install" to "Installed".
+  - **Uninstall** (after a confirmation) removes the row and the unpacked folder.
+  - **Reload** deletes the unpacked folder and unpacks the stored zip again.
+- Pack icons are written into the deploy zip as `file://` images.
+- The store shows `pluginType` as "Widgets" or "Images". Every pack in the store today is "Widgets".
+- **This app:**
+  - Installed packs are app state in the app data folder (`packs/<store id>.json`: the store record and the unpacked pack with its images), not in `layout.json`.
+  - Installing checks the download against the catalog's SHA-256 (the official app doesn't).
+  - "Reload from the store" downloads the pack again. It becomes "Update to …" when the store has a newer `versionCode`.
+  - Uninstalling needs no confirmation: cards made from the pack keep copies of its buttons and stay as they are.
+  - The palette has a foldable group per installed pack: the whole pack first, then every button `packAction` accepts (shortcuts, typed text and http(s) links) as its own computer-action card. The card's art uses the button's icon at 50%.
+  - The action picker's "Shortcut pack button" entry yields a plain `PC_CONTROL` action (id `"1"`, like any computer action). It's offered on every firmware, because the bar only ever sees a computer action.
+  - Existing shortcut-group cards made from packs are unchanged.
+
+## Cloud icon library (no login) **[C]**, checked 2026-11-22 and live on 2026-11-23
+- **Tags:** `GET https://gatewayssl.dev.aiks360.com/api/v1/base-service/pub/icon/tags/locales/allGrouped`.
+  - The only header is `Accept-Language`, which the official app takes from its language setting (`en-US` by default). The tag names follow it, e.g. `zh-CN` gives Chinese names.
+  - The reply needs `state == 200`. It returns `data: {group: [{id, tag}], category: [...], iconStyle: [...]}`: 5 groups, 12 categories, and 2 styles ("Monochrome", "Color").
+- **Pages:** `GET …/pub/icon/v2/page`. The official picker always sends all eight parameters, empty when unused:
+  - `pi`: the page, from 1. A new search or filter starts again at 1.
+  - `ps`: 50.
+  - `keyword`: the search text.
+  - `group`: always `false`. With `true`, the server returns albums instead (`records: [{description, icons: [{id, path, tags}]}]`).
+  - `projectId`: 20 for the "Icon" tab and 30 for the "Background" tab. The Background tab hides the filters.
+  - `groupId`, `categoryId`, `iconStyleId`: the picked tag, or empty for "All".
+- **Page replies:** `{current, size, total, records: [{id, name, path, groupName, categoryName, iconStyleName, tags, projectId}]}`. The official app reads `total` and `records[].path`.
+  - `path` is a 256 px PNG on the CDN, sometimes on plain `http://`.
+  - On 2026-11-22 there were 39,800 icons in total, 39,199 of them in project 20.
+- **Filters:** three rows of pills (Group, Category, Style), each starting with "All". The rows combine.
+- **Picked icons:** the official app keeps the icon's URL and sends it as is. It isn't put in the deploy zip. The editors for card icons, profile pictures, gesture prompt images and VivoCube buttons all use this picker.
+- **Mono icons:** light grey to white (about `#c0c0c0`–`#e0e0e0`) on a transparent background. They show fine on dark cards. The official app shows them as they are, with no tinting, over the `#232426` card background.
+- **This app:**
+  - It sends the same parameters, with `projectId` 20 only (no Background tab).
+  - It downloads the picked icon and keeps it as a PNG. The card art is drawn on a canvas, which a cross-origin image would make unreadable, and the image then goes to the bar with the other card images.
+
+## Store **[C]**
+- **App list:** `POST apps/100/fetchListV2` with `{"keyword": "", "pi": <page>, "ps": 20}`.
+- **Plugin list:** `GET plugin/page?keyword=&pi=<page>&ps=20`.
+- **Search:** the official app always sends `keyword` empty, so it has no working search. The server does filter on it (checked live on 2026-11-23: `keyword` in the app list's JSON body, and in the plugin list's query string). A `keyword` in the app list's query string is ignored.
+- **Update checks:** each installed app gets `POST apps/100/<package>/fetchLastVerV3` with `Content-Type: application/json`, an empty body and an 8 s timeout.
+  - The reply is V2's record wrapped in `{state: 200, msg: "ok", data: {…}}`. The official app reads `data.versionName` and `data.versionCode` and offers "Update (versionName)" when the code is newer.
+  - An unknown package returns `{state: 200, msg: "ok"}` with no `data`. V2 returns the bare record (an empty body for an unknown package). V3 doesn't accept `GET`.
+- **This app:** it searches as above, after typing pauses. It checks each app on the bar with V3 (sending `{}` as the body, which works), and it reads 100 records a page.
+
+## Other editors **[C]**
+- **Weather:** the card editor shows whether the AccuWeather key is set, and takes optional lat/lon. Under them it says "If no coordinates are configured, the weather for the current network location will be used." The key dialog stores `isUnitFahrenheit` and sends `metric`.
+  - The card always sends `param: {lat, lon}` as strings, so with no coordinates it's `{"lat": "", "lon": ""}`.
+  - Each field is checked only when filled: it must be a number in [-90, 90] or [-180, 180] (max 10 characters). Filling only one is accepted.
+  - What the launcher does with one coordinate, or none, hasn't been read from its code. The network-location behavior comes from the official app's text.
+- **Home Assistant:** the palette groups `1002 "sys.widget.iot"` items by category, with Refresh. Cards are only ever `SCENE` + `param.type: "HA_SCENE"`.
+  - The deployData is `{type: "SCENE", id: <the 1002 item id>, param: {type: "HA_SCENE"}, icon, iconScale}`. **No `name`** (the editor, "Home Assistant Scene", has only an Icon field) and no `bgColor`.
+  - The icon is the raw icon with its transparent border trimmed, not a composed card. Zoom (`iconScale`) runs from 10 to 100 in steps of 10 and defaults to 50.
+  - A local icon goes into the deploy zip as `file://image/<card uid>.png`; a cloud icon is sent as its URL.
+
+## Card images on the bar (launcher 1.0.9) **[code]** / this app
+- **The upload:** `UploadServiceIns.uploadZip(subDir, file, isFull)` unpacks the zip into `getExternalFilesDir(null)/<subDir>`. With `isFull` (the default) it empties that folder first. It then reloads the home screen. The file name must end in `.zip`, and the limit is 50 MB.
+- **The loaders:** `GlideExtend.loadSmartCore` (and `PicassoExtend.loadSmart`) resolve the path:
+  - http(s) URLs load as they are, and `resId://` loads a drawable.
+  - Otherwise they strip `file://` and load the file if it exists.
+  - A relative path that isn't there is looked up in `getExternalFilesDir(null)`, so `file://<subDir>/image/x.png` finds the uploaded file.
+- **Every image this app sends goes through these loaders:**
+  - computer-action cards (`PcControlHolder`)
+  - shortcut-group cards and their buttons (`HotKeyGroupHolder`, `RemoteAdapter`)
+  - multi-action and Home Assistant scene cards (`SceneHolder.setSceneImageV2`)
+  - gesture prompts (`SceneDialog.setImage`)
+  - profile pictures (`ProfileAdapter`, `ProfilePanel.setCurrent`)
+- **The official app:**
+  - It uploads with no query string, so the zip replaces the launcher's whole asset folder.
+  - It uploads last, after `30500`.
+  - It points at `file://image/<name>.png`.
+- **This app:**
+  - It puts every card image, button icon and profile picture into one zip as `image/<content hash>.png`.
+  - It posts the zip to `/upload/zip?subDir=ultrabar-app&isFull=true` before sending anything else, then points the payloads at `file://ultrabar-app/image/<hash>.png`.
+  - When that fails, it serves the same files from its own HTTP server for that deploy and says so.
+  - Firmware before 1.0.9 has no upload, so it always uses the HTTP server.
+  - The empty refresh zip after `1108` uses `isFull=false`, so the images stay.
+- **Not checked on a bar yet:**
+  - That the launcher accepts a zip with only file entries (no directory entries).
+  - That Home Assistant scene cards draw their `icon` like multi-action cards. Both come from `SceneHolder`; this app gives them the same full-card art.
+- **Profiles:** the profile menu has Edit name, "Save as preferred" (default, star icon) and Delete ("The default profile cannot be deleted"). A profile is deployed as `{id, name, showName, icon, iconScale, default, widget, module}`.
+- **App:**
+  - `.umpf` project files (SQLite) with New/Open/Save As and a recent list.
+  - A separate "Deploy Automation" button that sends only `30500`.
+  - Single-instance guard:
+    - **macOS:** an `fcntl` lock on `/tmp/UltraWorkSpace_ProcessLock_9F2A7C1E4B8D3F0A.lock`.
+    - **Windows:** `CreateMutexA("UltraWorkSpace_ProcessLock_9F2A7C1E4B8D3F0A")`, per session. A restart with `--restarting` skips the check.
+    - A second copy shows "Notice: Ultra WorkSpace is already running" and quits when that's closed. It doesn't bring the first copy forward.
+  - "Launch at startup".
 
 # Profile pictures and card sizes (2026-11-22)
 

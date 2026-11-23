@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Copy, Info, MapPin, Search, Trash2 } from "lucide-react";
 import { findWidget, useApp } from "../lib/store";
 import type { Widget } from "../lib/model";
-import { SOUNDSCAPES, WIDGETS, pcMeta } from "../lib/widgets";
+import { SOUNDSCAPES, SYSTEM_CARDS, WIDGETS, pcMeta } from "../lib/widgets";
+import { firmwareBefore } from "../lib/api";
+import { isHaScene } from "../lib/deploy";
+import { isMac } from "../lib/hid";
 import { allZones, timeIn, zoneCity, zoneOffset, zoneRegion } from "../lib/timezones";
 import { Button, Field, Spinner } from "./ui";
 import { PcControlEditor } from "./editors/PcControlEditor";
@@ -173,13 +176,71 @@ function Body({ w, set }: { w: Widget; set: Setter }) {
       );
     }
     case "DEVICE":
+      if (isHaScene(w)) {
+        return (
+          <div className="stack" style={{ gap: 0 }}>
+            <div className="panel-section">
+              <NameField w={w} set={set} />
+              <Note>Runs this Home Assistant scene when you tap the card.</Note>
+            </div>
+            <div className="panel-section">
+              <h4>Appearance</h4>
+              <IconEditor w={w} set={set} />
+              {w.icon && (
+                <div><Button size="sm" variant="ghost" onClick={() => set((x) => { delete x.icon; })}>Remove the icon</Button></div>
+              )}
+            </div>
+          </div>
+        );
+      }
       return (
         <div className="stack">
           <NameField w={w} set={set} />
           <Note>Controls this device from the bar. Devices come from the bar's smart-home connection.</Note>
         </div>
       );
+    case "CPU":
+    case "MEMORY":
+    case "STORAGE":
+    case "NETWORK":
+      return <SystemCardNotes w={w} />;
   }
+}
+
+const SYSTEM_TEXT: Partial<Record<Widget["type"], string>> = {
+  CPU: "Shows how busy this computer's processor is.",
+  MEMORY: "Shows how much of this computer's memory is in use.",
+  STORAGE: isMac ? "Shows how full this Mac's startup disk is." : "Shows how full this computer's drives are, all drives together.",
+  NETWORK: "Shows this computer's download and upload speed, with a chart.",
+};
+
+/** CPU, memory, storage and network cards have nothing to set up. */
+function SystemCardNotes({ w }: { w: Widget }) {
+  const agentOff = useApp((s) => s.info?.pcAgentEnabled === false);
+  const legacy = useApp((s) => firmwareBefore(s.status.bar?.ver, "1.0.9"));
+  const every = SYSTEM_CARDS[w.type]?.every;
+  return (
+    <div className="stack" style={{ gap: 12 }}>
+      {legacy && (
+        <div className="callout warn">
+          <Info size={14} />
+          <div>Your bar's firmware doesn't have this card, so Deploy leaves it out. It needs firmware 1.0.9 or later.</div>
+        </div>
+      )}
+      {agentOff && (
+        <div className="callout warn">
+          <Info size={14} />
+          <div>
+            The card stays empty while the bar isn't allowed to ask this computer.{" "}
+            <button className="link" onClick={() => useApp.getState().setView({ kind: "settings" })}>Turn it on in Settings</button>
+          </div>
+        </div>
+      )}
+      <Note>
+        {SYSTEM_TEXT[w.type]} The bar asks this computer every {every} seconds while the card is on screen, as long as ultrabar is running. Nothing to set up.
+      </Note>
+    </div>
+  );
 }
 
 function ZonePicker({ w, set }: { w: Widget; set: Setter }) {
@@ -275,12 +336,16 @@ function WeatherEditor({ w, set }: { w: Widget; set: Setter }) {
           <div>Weather needs an AccuWeather API key. <button className="link" onClick={() => useApp.getState().setView({ kind: "integrations" })}>Add it in Integrations</button></div>
         </div>
       )}
-      <Field label="Location" error={error}>
-        {w.weather?.place && (
+      <Field label="Location" error={error} hint={!lat.trim() && !lon.trim() ? "None set, so the bar uses its network location." : undefined}>
+        {(w.weather?.place || (lat.trim() && lon.trim())) && (
           <div className="group" style={{ marginBottom: 6 }}>
             <div className="group-row" style={{ minHeight: 44 }}>
               <MapPin size={14} className="faint" />
-              <div className="txt"><b>{w.weather.place}</b><span>{Number(lat).toFixed(3)}, {Number(lon).toFixed(3)}</span></div>
+              <div className="txt">
+                <b>{w.weather?.place ?? "Coordinates"}</b>
+                <span>{Number(lat).toFixed(3)}, {Number(lon).toFixed(3)}</span>
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => set((x) => { x.weather = { lat: "", lon: "" }; })} title="Use the bar's network location instead">Clear</Button>
             </div>
           </div>
         )}

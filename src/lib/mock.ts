@@ -59,6 +59,11 @@ const tree: Record<string, unknown[]> = {
       ] }],
       id: "sound", last: true, name: "Soundscape", objectName: "Soundscape", type: "SOUND_SCAPE",
     },
+    // Listed when an app with a capability service is running (launcher 1.0.9).
+    {
+      parentId: "sc.other", id: "capability", name: "App Capability", objectName: "App Capability", type: "APP_CAPABILITY", last: true,
+      components: [{ id: "1", name: "App", uiType: "SELECT", inputType: "STR", unit: "", options: [{ label: "Notes", value: "com.ultrabar.notes" }] }],
+    },
   ],
   "sc.devices": [
     { id: "sc.devices.sw", last: false, name: "Switch" },
@@ -103,6 +108,7 @@ const triggers = {
 
 let apps = [
   { application: "com.ultrabar.calculator", appName: "Calculator", icon: "", versionName: "1.0.1", versionCode: 1, systemApp: true, allowProfile: true, config: false },
+  { application: "com.ultrabar.notes", appName: "Notes", icon: "", versionName: "1.0.2", versionCode: 2, systemApp: false, allowProfile: true, config: false },
   { application: "com.ultrabar.homeassistant", appName: "Home Assistant", icon: "", versionName: "0.9", versionCode: 3, systemApp: false, allowProfile: false, config: true, port: 9000, sessionToken: "demo" },
 ];
 
@@ -131,6 +137,83 @@ const packs: Record<string, unknown> = {
   ] },
 };
 
+type MockInstalled = { plugin: { id: number; name?: string }; pack: unknown; installedAt: number };
+function installedPacks(): MockInstalled[] {
+  const list = JSON.parse(localStorage.getItem("mock.packs") ?? "[]") as MockInstalled[];
+  return list.sort((a, b) => String(a.plugin.name).localeCompare(String(b.plugin.name)));
+}
+function saveInstalledPacks(list: MockInstalled[]) {
+  localStorage.setItem("mock.packs", JSON.stringify(list));
+}
+
+// The cloud icon library: the real filters, and generated icons (the CDN's
+// images can't be drawn into card art from a plain browser).
+const iconTags = {
+  group: [{ id: 1516, tag: "Function" }, { id: 1525, tag: "Brands" }, { id: 1527, tag: "UI Elements" }, { id: 1533, tag: "Apps" }, { id: 3045, tag: "Development" }],
+  category: [
+    { id: 1517, tag: "Key Actions" }, { id: 1534, tag: "Apps · Color" }, { id: 3035, tag: "Brands · Official Color" }, { id: 3038, tag: "Brands · Color" },
+    { id: 3040, tag: "Web Apps" }, { id: 3041, tag: "Work Apps" }, { id: 3043, tag: "General" }, { id: 3046, tag: "Development" },
+    { id: 3047, tag: "Apps · Mono Line" }, { id: 3049, tag: "Brands · Mono" }, { id: 3051, tag: "UI · Line" }, { id: 3053, tag: "UI · Fill" },
+  ],
+  iconStyle: [{ id: 1519, tag: "Monochrome" }, { id: 1529, tag: "Color" }],
+};
+const ICON_WORDS = ["play", "pause", "mute", "mic", "camera", "mail", "chat", "code", "git", "home", "light", "fan", "music", "video", "star", "heart", "zoom", "search", "lock", "power", "cloud", "sun", "moon", "bell"];
+const libraryIcons = Array.from({ length: 130 }, (_, i) => {
+  const name = `${ICON_WORDS[i % ICON_WORDS.length]}${i >= ICON_WORDS.length ? `-${Math.floor(i / ICON_WORDS.length)}` : ""}`;
+  const color = i % 3 === 0;
+  const fill = color ? `hsl(${(i * 47) % 360} 70% 55%)` : "#e8e8e8";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><rect x="40" y="40" width="176" height="176" rx="${(i % 4) * 22}" fill="none" stroke="${fill}" stroke-width="16"/><text x="128" y="160" font-family="sans-serif" font-size="96" font-weight="700" text-anchor="middle" fill="${fill}">${name[0].toUpperCase()}</text></svg>`;
+  return {
+    id: 40000 + i, name, path: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, iconStyleName: color ? "color" : "mono",
+    groupId: iconTags.group[i % 5].id, categoryId: iconTags.category[i % 12].id, iconStyleId: color ? 1529 : 1519,
+  };
+});
+
+function iconPage(q: { page?: number; keyword?: string; groupId?: number | null; categoryId?: number | null; iconStyleId?: number | null }) {
+  const hits = libraryIcons.filter((i) =>
+    matches(q.keyword, i.name) && (!q.groupId || i.groupId === q.groupId) && (!q.categoryId || i.categoryId === q.categoryId) && (!q.iconStyleId || i.iconStyleId === q.iconStyleId));
+  const page = Math.max(1, q.page ?? 1);
+  return { total: hits.length, icons: hits.slice((page - 1) * 50, page * 50).map(({ id, name, path, iconStyleName }) => ({ id, name, path, iconStyleName })) };
+}
+
+/** Rough stand-in for the store's keyword search. */
+function matches(keyword: unknown, ...fields: (string | null | undefined)[]) {
+  const k = typeof keyword === "string" ? keyword.trim().toLowerCase() : "";
+  return !k || fields.some((f) => f?.toLowerCase().includes(k));
+}
+
+// App Capability (acts 30750–30752), shaped like launcher 1.0.9's replies.
+// The made-up Notes app has two actions; folders page through 30752, and a
+// note list depends on the folder.
+const capActions: Record<string, unknown[]> = {
+  "com.ultrabar.notes": [
+    { actionId: "note.create", name: "New note", description: "Add a note to a folder", features: 1 },
+    { actionId: "note.open", name: "Open note", description: "Show a note on the bar", features: 1 },
+  ],
+};
+const folderParam = { id: "folder", name: "Folder", type: "SELECT", required: true, options: { provider: "REMOTE", items: [], searchable: false }, dependsOn: [] };
+const capParams: Record<string, unknown[]> = {
+  "note.create": [
+    folderParam,
+    { id: "title", name: "Title", type: "TEXT", placeholder: "Groceries", required: true, maxLength: 60, dependsOn: [] },
+    { id: "color", name: "Color", type: "SELECT", required: false, options: { provider: "STATIC", items: [{ label: "Yellow", value: "yellow" }, { label: "Blue", value: "blue" }] }, dependsOn: [] },
+  ],
+  "note.open": [
+    folderParam,
+    { id: "note", name: "Note", type: "SELECT", required: true, options: { provider: "REMOTE", items: [] }, dependsOn: ["folder"] },
+  ],
+};
+function capOptions(d: { describeId: string; cursor?: string; limit?: number; params?: Record<string, string> }) {
+  const all = d.describeId === "folder"
+    ? Array.from({ length: 45 }, (_, i) => ({ label: `Folder ${i + 1}`, value: `f${i + 1}` }))
+    : d.params?.folder ? Array.from({ length: 6 }, (_, i) => ({ label: `${d.params!.folder.toUpperCase()} note ${i + 1}`, value: `${d.params!.folder}-n${i + 1}` })) : [];
+  if (d.describeId === "note" && !d.params?.folder) return { success: false, error: { code: "MISSING_PARAM", message: "folder is required" } };
+  const from = Number(d.cursor || 0), n = d.limit ?? 10;
+  const items = all.slice(from, from + n);
+  const more = from + n < all.length;
+  return { success: true, items, nextCursor: more ? String(from + n) : null, hasMore: more };
+}
+
 /** Plays back the events a real bar sends while installing (act 30601). */
 function simulateInstall(pkg: string) {
   const ev = (type: string, result: unknown, at: number) =>
@@ -154,8 +237,21 @@ async function request(act: number, data: unknown): Promise<unknown> {
     case 1002: case 1300: case 30701: case 30720: return [];
     case 1205: return tree[(data as string) ?? ""] ?? [];
     case 1617: return knobTree[(data as string) ?? ""] ?? [];
+    case 30200: {
+      const d = data as { serialNo: string; propertyId: number };
+      if (d.propertyId !== 5) return null;
+      if (d.serialNo !== "DK01A2234") throw { code: -1, message: "The bar didn't answer in time." };
+      return { result: "1.0.3" };
+    }
     case 30730: return (data as string[]).map((serialNo) => ({ serialNo, online: serialNo === "DK01A2234" }));
     case 30700: return triggers;
+    case 30750: {
+      const list = capActions[data as string];
+      if (!list) throw { code: -1, message: `no active session for packageName=${data}` };
+      return list;
+    }
+    case 30751: return capParams[(data as { actionId: string }).actionId] ?? [];
+    case 30752: return capOptions(data as Parameters<typeof capOptions>[0]);
     case 30710: return [{ label: "Default Profile", value: "profile_2", last: true }];
     case 30721: return [{ label: "前台", value: "true", last: true }, { label: "后台", value: "false", last: true }];
     case 1103: case 1108: case 30500: case 30300: case 1010: return "ok";
@@ -200,11 +296,39 @@ export async function invoke(cmd: string, args: Record<string, unknown> = {}): P
     case "bar_request": return request(args.act as number, args.data);
     case "load_doc": { const d = localStorage.getItem("mock.doc"); return d ? JSON.parse(d) : null; }
     case "save_doc": localStorage.setItem("mock.doc", JSON.stringify(args.doc)); return;
-    case "publish_icon": return "http://192.168.1.20:47215/i/mock.png";
-    case "store_apps": await sleep(400); return storeApps;
-    case "store_plugins": await sleep(400); return storePlugins;
-    case "store_plugin_pack": await sleep(600); return packs[args.file as string];
+    case "store_icon": {
+      // A stable id per image, like the content hash the app uses.
+      const d = String(args.data);
+      let h = 0;
+      for (let i = 0; i < d.length; i++) h = (Math.imul(h, 31) + d.charCodeAt(i)) >>> 0;
+      return h.toString(16).padStart(8, "0");
+    }
+    case "icon_http_base": return "http://192.168.1.20:47215/i/";
+    case "upload_bar_images": await sleep(400); return;
+    case "icon_library_tags": await sleep(300); return iconTags;
+    case "icon_library_page": await sleep(350); return iconPage(args.query as Parameters<typeof iconPage>[0]);
+    case "icon_library_image": await sleep(200); return args.url;
+    case "store_apps": await sleep(400); return storeApps.filter((a) => matches(args.keyword, a.appName, a.application, a.desc));
+    case "store_plugins": await sleep(400); return storePlugins.filter((p) => matches(args.keyword, p.name, p.desc, p.author));
+    case "store_app_latest": await sleep(250); return storeApps.find((a) => a.application === args.package) ?? null;
+    // Installed packs live in the app's data folder; here, in localStorage.
+    case "installed_packs": return installedPacks();
+    case "install_pack": {
+      await sleep(700);
+      const plugin = args.plugin as { id: number; file: string };
+      const pack = packs[plugin.file];
+      if (!pack) throw new Error("The downloaded pack doesn't match the store's checksum, so it wasn't used.");
+      const entry = { plugin, pack, installedAt: Date.now() };
+      saveInstalledPacks([...installedPacks().filter((p) => p.plugin.id !== plugin.id), entry]);
+      return entry;
+    }
+    case "uninstall_pack": saveInstalledPacks(installedPacks().filter((p) => p.plugin.id !== args.id)); return;
     case "set_allowed_actions": case "set_pc_agent_enabled": case "test_pc_action": case "refresh_bar_screen": return;
+    case "running_apps": await sleep(300); return [
+      { name: "Safari", path: "/Applications/Safari.app" },
+      { name: "Slack", path: "/Applications/Slack.app" },
+      { name: "Visual Studio Code", path: "/Applications/Visual Studio Code.app" },
+    ];
     case "ha_logged_in": return false;
     case "discord_status": return discord;
     case "discord_set_app": discord = { ...discord, clientId: String(args.clientId), configured: !!args.clientId && (!!args.clientSecret || discord.configured) }; return discord;

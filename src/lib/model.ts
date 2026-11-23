@@ -12,11 +12,18 @@ export type WidgetType =
   | "SCENE"
   | "SET"
   | "DEVICE"
-  | "HOT_KEY_GROUP";
+  | "HOT_KEY_GROUP"
+  // This computer's load, read by the bar through the PC agent (firmware 1.0.9+).
+  | "CPU"
+  | "MEMORY"
+  | "STORAGE"
+  | "NETWORK";
 
 export type IconSpec =
   | { kind: "glyph"; glyph: string; color: string; png: string }
   | { kind: "image"; png: string }
+  /** From the vendor's cloud icon library; `png` is the downloaded icon. */
+  | { kind: "library"; id: number; name: string; png: string }
   | { kind: "url"; url: string };
 
 export type PcAction = "hotkey" | "openBrowser" | "startApp" | "openFile" | "execCmd" | "inputText" | "discord";
@@ -33,12 +40,18 @@ export interface DiscordAction {
   label?: string;
 }
 
+/** Open app: "single" brings a running copy to the front (or starts one),
+ * "new" always starts another copy. Missing means "single". */
+export type LaunchMode = "single" | "new";
+
 export interface PcControl {
   action: PcAction;
   /** HID usage codes (hotkey only). */
   keys?: number[];
   url?: string;
   path?: string;
+  /** startApp only. */
+  launchMode?: LaunchMode;
   cmd?: string;
   text?: string;
   discord?: DiscordAction;
@@ -58,6 +71,21 @@ export interface Action {
   summary: string;
   /** Set for PC_CONTROL actions; values are derived from it on deploy. */
   pc?: PcControl;
+  /** Set for APP_CAPABILITY actions; values are derived from it on deploy. */
+  capability?: AppCapability;
+}
+
+/** An action that an app on the bar offers (acts 30750–30752), as picked.
+ * Names are kept so the action reads the same while the bar is offline. */
+export interface AppCapability {
+  packageName: string;
+  appName: string;
+  actionId: string;
+  actionName: string;
+  /** Param id → value, as the app expects it. */
+  params: Record<string, string>;
+  /** Param id → param name and the chosen value's label, for display. */
+  labels?: Record<string, { name: string; value: string }>;
 }
 
 /** One button on a shortcut group's page. */
@@ -97,8 +125,29 @@ export interface Widget {
 
 export type KeyEvent = "click" | "double" | "long";
 
-/** What one module key does in a profile: an action list per gesture. */
-export type KeyBinding = Partial<Record<KeyEvent, Action[]>>;
+/** What the bar shows when a gesture runs (the official app's "Prompt Dialog"). */
+export interface GesturePrompt {
+  show: boolean;
+  /** Empty: the first action's name. */
+  text?: string;
+  /** Background image (PNG data URL), already cropped to the bar's prompt. */
+  image?: string;
+}
+
+/** One gesture of a module key (or a Sense Cube tap, or a VivoCube button):
+ * its actions, an on/off switch and the prompt. */
+export interface Gesture {
+  actions: Action[];
+  /** Off: the gesture isn't sent, so it does nothing. Missing means on. */
+  enabled?: boolean;
+  /** Missing: shown, with the first action's name (as earlier versions sent it). */
+  prompt?: GesturePrompt;
+}
+
+/** What one module key does in a profile, per gesture. Layouts saved before
+ * gestures had a switch and a prompt stored a bare action list here; see
+ * `upgradeProfiles` in store.ts. */
+export type KeyBinding = Partial<Record<KeyEvent, Gesture>>;
 
 /** What a Knob controls: a node from the bar's knob catalog (act 1617). */
 export interface KnobTarget {

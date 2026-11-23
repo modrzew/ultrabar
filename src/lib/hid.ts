@@ -50,6 +50,7 @@ for (let i = 13; i <= 24; i++) HID_LABEL[91 + i] = `F${i}`;
 for (let i = 0; i <= 9; i++) HID_LABEL[i === 0 ? 98 : 88 + i] = `Num ${i}`;
 
 export const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform || navigator.userAgent);
+export const isWindows = typeof navigator !== "undefined" && /Win/i.test(navigator.platform || navigator.userAgent);
 
 export function hidFromCode(code: string): number | undefined {
   return CODE_TO_HID[code];
@@ -59,10 +60,76 @@ export function isModifier(hid: number) {
   return hid >= 224 && hid <= 231;
 }
 
+/** Media, browser, app and power keys. They share the hotkey code space:
+ * consumer keys are 10000 + their HID usage, system keys 20000 + usage. These
+ * are the ones the bar's hub can send (`HidKeyboardOut.sendSystemOrConsumerKey`,
+ * hub 1.0.4); it drops any other code of 10000 or more. Groups and order
+ * follow the official app's key selector (`HidKeyboardDef`), which lists
+ * Search under both Apps and Browser. */
+export type SpecialGroup = "system" | "media" | "apps" | "browser";
+
+export const SPECIAL_GROUPS: { key: SpecialGroup; label: string }[] = [
+  { key: "media", label: "Media" },
+  { key: "system", label: "System" },
+  { key: "apps", label: "Apps" },
+  { key: "browser", label: "Browser" },
+];
+
+/** `label` is shown on the key; `name` where the key appears alone (a card's summary). */
+export const SPECIAL_KEYS: { code: number; label: string; name?: string; group: SpecialGroup }[] = [
+  { code: 10182, label: "Previous", name: "Previous track", group: "media" },
+  { code: 10181, label: "Next", name: "Next track", group: "media" },
+  { code: 10205, label: "Play/Pause", group: "media" },
+  { code: 10183, label: "Stop", group: "media" },
+  { code: 10180, label: "Rewind", group: "media" },
+  { code: 10179, label: "Fast forward", group: "media" },
+  { code: 10233, label: "Volume up", group: "media" },
+  { code: 10234, label: "Volume down", group: "media" },
+  { code: 10226, label: "Mute", group: "media" },
+  { code: 20129, label: "Power", group: "system" },
+  { code: 20130, label: "Sleep", group: "system" },
+  { code: 20131, label: "Wake", group: "system" },
+  { code: 10111, label: "Brightness up", group: "system" },
+  { code: 10112, label: "Brightness down", group: "system" },
+  { code: 10177, label: "Display toggle", group: "system" },
+  { code: 10394, label: "Mail", group: "apps" },
+  { code: 10402, label: "Calculator", group: "apps" },
+  { code: 10387, label: "Media player", group: "apps" },
+  { code: 10404, label: "My Computer", group: "apps" },
+  { code: 10545, label: "Search", group: "apps" },
+  { code: 10548, label: "Back", name: "Browser back", group: "browser" },
+  { code: 10549, label: "Forward", name: "Browser forward", group: "browser" },
+  { code: 10551, label: "Refresh", name: "Browser refresh", group: "browser" },
+  { code: 10550, label: "Stop", name: "Browser stop", group: "browser" },
+  { code: 10545, label: "Search", group: "browser" },
+  { code: 10546, label: "Favorites", group: "browser" },
+  { code: 10547, label: "Home", name: "Browser home", group: "browser" },
+];
+
+const SPECIAL_LABEL = new Map(SPECIAL_KEYS.map((k) => [k.code, k.name ?? k.label]));
+
+/** A media, browser, app or power key the bar can send. */
+export function isSpecialKey(code: number) {
+  return SPECIAL_LABEL.has(code);
+}
+
+/** A key the bar can type: a keyboard usage (1–255) or a supported special key. */
+export function isSendableKey(code: number) {
+  return Number.isInteger(code) && ((code > 0 && code < 256) || isSpecialKey(code));
+}
+
+/** The keys as the bar sends them. It only sends the first special key of a
+ * combination and ignores the rest (`HidKeyboardOut.sendKeys`), so a special
+ * key can't be combined with modifiers. */
+export function sentKeys(keys: number[]): number[] {
+  const special = keys.find(isSpecialKey);
+  return special !== undefined ? [special] : keys;
+}
+
 export function keyLabel(hid: number): string {
   const m = MODIFIERS[hid];
   if (m) return isMac ? m.mac : m.other;
-  return HID_LABEL[hid] ?? `#${hid}`;
+  return HID_LABEL[hid] ?? SPECIAL_LABEL.get(hid) ?? `#${hid}`;
 }
 
 /** Modifiers first (in platform order), then other keys. */

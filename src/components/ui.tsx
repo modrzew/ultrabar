@@ -13,9 +13,20 @@ export function Button({ variant = "default", size = "md", icon, className = "",
   return <button type="button" className={cls} {...rest} />;
 }
 
+/** A click inside a `<label>` is passed on to the first control in it. That
+ * should only happen from the label's text, and only to a text field or
+ * list: a click on an action row's text would otherwise press the row's
+ * remove button. */
+function fieldClick(e: React.MouseEvent<HTMLLabelElement>) {
+  const t = e.target as Element;
+  if (t.closest("input, select, textarea")) return;
+  const first = e.currentTarget.querySelector("button, input, select, textarea");
+  if (t.closest("button") || !t.closest(".label") || first?.tagName === "BUTTON") e.preventDefault();
+}
+
 export function Field({ label, hint, error, aside, children }: { label?: ReactNode; hint?: ReactNode; error?: ReactNode; aside?: ReactNode; children: ReactNode }) {
   return (
-    <label className="field" onClick={(e) => e.target instanceof HTMLButtonElement && e.preventDefault()}>
+    <label className="field" onClick={fieldClick}>
       {label && (
         <span className="label">
           <span>{label}</span>

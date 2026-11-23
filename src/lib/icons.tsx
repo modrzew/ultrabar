@@ -67,23 +67,27 @@ export async function imageFilePng(file: File): Promise<string> {
  * 140×140 thumbnails, center-cropped. */
 export const PROFILE_IMAGE = { w: 220, h: 200 };
 
+/** An image center-cropped to fill W×H ("cover"). */
+async function coverPng(src: string, W: number, H: number): Promise<string> {
+  const img = await loadImage(src);
+  const iw = img.naturalWidth, ih = img.naturalHeight;
+  if (!iw || !ih) throw new Error("empty image");
+  const k = Math.max(W / iw, H / ih);
+  const sw = W / k, sh = H / k;
+  const c = document.createElement("canvas");
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext("2d")!;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(img, (iw - sw) / 2, (ih - sh) / 2, sw, sh, 0, 0, W, H);
+  return c.toDataURL("image/png");
+}
+
 /** Read an image file, center-cropped to the profile picture size. */
 export async function profileImagePng(file: File): Promise<string> {
   const url = URL.createObjectURL(file);
   try {
-    const img = await loadImage(url);
-    const { w: W, h: H } = PROFILE_IMAGE;
-    const iw = img.naturalWidth, ih = img.naturalHeight;
-    if (!iw || !ih) throw new Error("empty image");
-    const k = Math.max(W / iw, H / ih);
-    const sw = W / k, sh = H / k;
-    const c = document.createElement("canvas");
-    c.width = W;
-    c.height = H;
-    const ctx = c.getContext("2d")!;
-    ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(img, (iw - sw) / 2, (ih - sh) / 2, sw, sh, 0, 0, W, H);
-    return c.toDataURL("image/png");
+    return await coverPng(url, PROFILE_IMAGE.w, PROFILE_IMAGE.h);
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -147,4 +151,58 @@ function opaqueBounds(img: HTMLImageElement) {
     }
   }
   return x1 < 0 ? { x: 0, y: 0, w, h } : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+/** Gesture prompt picture. The launcher's prompt (`SceneDialog`, launcher
+ * 1.0.9) trims the picture's transparent edges, then stretches what's left
+ * over a 200 dp wide box with 40 dp rounded corners (`fitXY`); the box is as
+ * tall as the screen minus 80 dp, most likely 200 (1 dp = 1 px). */
+export const PROMPT_IMAGE = { w: 200, h: 200 };
+
+/** Makes the two corners barely opaque (alpha 2 of 255, invisible) so the
+ * launcher's trim, which keeps pixels with alpha over 1, keeps the whole
+ * picture and doesn't stretch the rest out of shape. */
+function keepCorners(ctx: CanvasRenderingContext2D, W: number, H: number) {
+  for (const [x, y] of [[0, 0], [W - 1, H - 1]]) {
+    const px = ctx.getImageData(x, y, 1, 1);
+    if (px.data[3] < 2) {
+      px.data.set([0, 0, 0, 2]);
+      ctx.putImageData(px, x, y);
+    }
+  }
+}
+
+async function promptCanvas(draw: (ctx: CanvasRenderingContext2D, W: number, H: number) => Promise<void>): Promise<string> {
+  const { w: W, h: H } = PROMPT_IMAGE;
+  const c = document.createElement("canvas");
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext("2d")!;
+  ctx.imageSmoothingQuality = "high";
+  await draw(ctx, W, H);
+  keepCorners(ctx, W, H);
+  return c.toDataURL("image/png");
+}
+
+/** Read an image file for a gesture prompt, center-cropped to fill it. */
+export async function promptImageFile(file: File): Promise<string> {
+  const url = URL.createObjectURL(file);
+  try {
+    const cover = await coverPng(url, PROMPT_IMAGE.w, PROMPT_IMAGE.h);
+    const img = await loadImage(cover);
+    return await promptCanvas(async (ctx) => ctx.drawImage(img, 0, 0));
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** A library icon (a square, mostly transparent PNG) for a gesture prompt:
+ * centered whole, at 80%, on a transparent picture of the prompt's size. */
+export async function promptImageIcon(png: string): Promise<string> {
+  const img = await loadImage(png);
+  return promptCanvas(async (ctx, W, H) => {
+    const k = (0.8 * Math.min(W, H)) / Math.max(img.naturalWidth, img.naturalHeight);
+    const dw = img.naturalWidth * k, dh = img.naturalHeight * k;
+    ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  });
 }

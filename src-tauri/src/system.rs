@@ -1,9 +1,11 @@
-//! This computer's output volume and display brightness, 0–100.
+//! This computer's output volume (0–100, and muted or not) and display
+//! brightness (0–100).
 //!
 //! The bar asks for these when a Knob module is set to control the computer
 //! (`SET_VOLUME`/`GET_VOLUME`, `SET_BRIGHTNESS`/`GET_BRIGHTNESS` pushes). It
 //! polls the current value every few seconds while the knob is bound, so the
-//! getters have to be cheap.
+//! getters have to be cheap. `GET_MUTE`/`SET_MUTE` are answered like the
+//! official app does, though no bar firmware sends them yet.
 
 pub async fn get_volume() -> Result<u8, String> {
     imp::get_volume().await
@@ -11,6 +13,14 @@ pub async fn get_volume() -> Result<u8, String> {
 
 pub async fn set_volume(v: u8) -> Result<(), String> {
     imp::set_volume(v.min(100)).await
+}
+
+pub async fn get_mute() -> Result<bool, String> {
+    imp::get_mute().await
+}
+
+pub async fn set_mute(muted: bool) -> Result<(), String> {
+    imp::set_mute(muted).await
 }
 
 pub async fn get_brightness() -> Result<u8, String> {
@@ -51,6 +61,21 @@ mod imp {
 
     pub async fn set_volume(v: u8) -> Result<(), String> {
         osascript(&format!("set volume output volume {v}"))
+            .await
+            .map(|_| ())
+    }
+
+    pub async fn get_mute() -> Result<bool, String> {
+        // "missing value" when the output device can't be muted.
+        match osascript("output muted of (get volume settings)").await?.as_str() {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err("This Mac's output device can't be muted".into()),
+        }
+    }
+
+    pub async fn set_mute(muted: bool) -> Result<(), String> {
+        osascript(&format!("set volume output muted {muted}"))
             .await
             .map(|_| ())
     }
@@ -167,6 +192,16 @@ mod imp {
         .await
     }
 
+    pub async fn get_mute() -> Result<bool, String> {
+        com(|| unsafe { endpoint()?.GetMute() })
+            .await
+            .map(|b| b.as_bool())
+    }
+
+    pub async fn set_mute(muted: bool) -> Result<(), String> {
+        com(move || unsafe { endpoint()?.SetMute(muted, std::ptr::null()) }).await
+    }
+
     const UNSUPPORTED: &str = "The main display doesn't accept brightness changes from Windows (DDC/CI may be turned off in its menu)";
 
     /// Calls `f` with the primary monitor's physical handle (DDC/CI, as the
@@ -256,6 +291,18 @@ mod imp {
         )
         .await
         .map(|_| ())
+    }
+
+    pub async fn get_mute() -> Result<bool, String> {
+        let s = run("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"]).await?;
+        Ok(s.contains("[MUTED]"))
+    }
+
+    pub async fn set_mute(muted: bool) -> Result<(), String> {
+        let v = if muted { "1" } else { "0" };
+        run("wpctl", &["set-mute", "@DEFAULT_AUDIO_SINK@", v])
+            .await
+            .map(|_| ())
     }
 
     pub async fn get_brightness() -> Result<u8, String> {

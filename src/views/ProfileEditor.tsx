@@ -7,6 +7,7 @@ import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordin
 import { CSS } from "@dnd-kit/utilities";
 import { ArrowUpFromLine, ImagePlus, Star, Trash2 } from "lucide-react";
 import { useApp } from "../lib/store";
+import { firmwareBefore } from "../lib/api";
 import type { Profile, Widget } from "../lib/model";
 import { profileImagePng } from "../lib/icons";
 import { CardFace, cardIssue, cardStyle } from "../components/WidgetCard";
@@ -253,7 +254,9 @@ function FragmentWithCaret({ caret, children }: { caret: boolean; children: Reac
 
 function SortableCard({ w, selected }: { w: Widget; selected: boolean }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: w.uid, data: { kind: "card", widget: w } });
-  const issue = cardIssue(w);
+  const legacyFirmware = useApp((s) => firmwareBefore(s.status.bar?.ver, "1.0.9"));
+  const pcAgentEnabled = useApp((s) => s.info?.pcAgentEnabled);
+  const issue = cardIssue(w, { legacyFirmware, pcAgentEnabled });
   const style: CSSProperties = { ...cardStyle(w), transform: CSS.Translate.toString(transform), transition };
   return (
     <div

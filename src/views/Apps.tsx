@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { AlertTriangle, ArrowUpCircle, Blocks, Download, ExternalLink, Package, RefreshCw, Store, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowUpCircle, Blocks, Download, ExternalLink, Package, RefreshCw, Search, Store, Trash2 } from "lucide-react";
 import { useApp, type AppJob, type BarApp } from "../lib/store";
-import { isTauri, type StoreApp } from "../lib/api";
+import { api, isTauri, type StoreApp } from "../lib/api";
 import { barAppIconUrl } from "../lib/deploy";
+import { useStoreSearch } from "../lib/market";
 import { Button, Empty, Modal, Spinner } from "../components/ui";
 
 export function AppsView() {
@@ -13,17 +14,24 @@ export function AppsView() {
   const jobs = useApp((s) => s.appJobs);
   const [refreshing, setRefreshing] = useState(false);
   const [removing, setRemoving] = useState<BarApp | null>(null);
+  const [query, setQuery] = useState("");
+  const search = useStoreSearch(query, api.storeApps);
   const online = status.state === "online";
   const busy = Object.keys(jobs).length > 0;
 
   useEffect(() => {
     void useApp.getState().loadMarket();
   }, []);
+  // Update checks follow the apps on the bar (installs and removals change them).
+  const installed = apps.map((a) => `${a.application}@${a.versionCode ?? ""}`).join(",");
+  useEffect(() => {
+    if (installed) void useApp.getState().checkAppUpdates();
+  }, [installed]);
 
   const refresh = async () => {
     setRefreshing(true);
     const s = useApp.getState();
-    await Promise.all([online ? s.loadCatalog() : null, s.loadMarket(true)]);
+    await Promise.all([online ? s.loadCatalog().then(() => s.checkAppUpdates()) : null, s.loadMarket(true)]);
     setRefreshing(false);
   };
 
@@ -34,7 +42,9 @@ export function AppsView() {
   };
 
   const inStore = new Map(market.apps.map((a) => [a.application, a]));
-  const available = market.apps.filter((a) => !apps.some((b) => b.application === a.application));
+  const latest = (pkg: string) => (pkg in market.latest ? market.latest[pkg] : inStore.get(pkg));
+  const notInstalled = (a: StoreApp) => !apps.some((b) => b.application === a.application);
+  const available = (search.results ?? market.apps).filter(notInstalled);
   const install = (a: { application: string; appName: string }) => void useApp.getState().installApp(a.application, a.appName);
 
   return (
@@ -57,7 +67,7 @@ export function AppsView() {
               <Empty icon={<Package size={24} />} title="No extra apps">The bar only has its built-in features right now.</Empty>
             ) : (
               apps.map((a) => {
-                const store = inStore.get(a.application);
+                const store = latest(a.application);
                 const update = store?.versionCode && a.versionCode !== undefined && store.versionCode > a.versionCode ? store : null;
                 const job = jobs[a.application];
                 return (
@@ -90,18 +100,33 @@ export function AppsView() {
         </section>
 
         <section>
-          <h3 className="section-title"><Store size={14} /> From the UltraBar store</h3>
-          {market.state === "error" ? (
+          <div className="row" style={{ alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <h3 className="section-title grow" style={{ margin: 0 }}><Store size={14} /> From the UltraBar store</h3>
+            <div className="input-affix store-search">
+              <Search size={13} style={{ position: "absolute", left: 9, color: "var(--text-3)" }} />
+              <input className="input" style={{ paddingLeft: 28 }} placeholder="Search the store" value={query} onChange={(e) => setQuery(e.target.value)} spellCheck={false} aria-label="Search the store" />
+              {search.loading && <span className="suffix"><Spinner /></span>}
+            </div>
+          </div>
+          {search.error ? (
+            <div className="callout warn"><AlertTriangle size={14} /><div>{search.error}</div></div>
+          ) : market.state === "error" && !search.results ? (
             <div className="callout warn">
               <AlertTriangle size={14} />
               <div>{market.error} <button className="link" onClick={() => void useApp.getState().loadMarket(true)}>Try again</button></div>
             </div>
-          ) : market.state !== "ready" ? (
+          ) : market.state !== "ready" && !search.results ? (
             <div className="group"><div className="row" style={{ justifyContent: "center", padding: 24 }}><Spinner /></div></div>
           ) : (
             <div className="group">
               {available.length === 0 ? (
-                <Empty icon={<Store size={24} />} title="Nothing new">Everything in the store is already on your bar.</Empty>
+                search.results ? (
+                  <Empty icon={<Search size={24} />} title="No matches">
+                    {search.results.length ? `Everything matching “${query.trim()}” is already on your bar.` : `Nothing in the store matches “${query.trim()}”.`}
+                  </Empty>
+                ) : (
+                  <Empty icon={<Store size={24} />} title="Nothing new">Everything in the store is already on your bar.</Empty>
+                )
               ) : (
                 available.map((a) => (
                   <StoreRow key={a.application} a={a} job={jobs[a.application]} disabled={!online || busy} onInstall={() => install(a)} />
@@ -109,7 +134,7 @@ export function AppsView() {
               )}
             </div>
           )}
-          {market.state === "ready" && available.length > 0 && !online && (
+          {available.length > 0 && !online && (
             <p className="faint" style={{ margin: "8px 2px 0", fontSize: 12 }}>Connect to your bar to install apps.</p>
           )}
         </section>
