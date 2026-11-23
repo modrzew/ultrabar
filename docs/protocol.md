@@ -663,3 +663,19 @@ Card `{id, type: "PC_BOOT", name, param: {uid}}`, with Name plus a picker for wh
   - A separate "Deploy Automation" button that sends only `30500`.
   - Single-instance guard.
   - "Launch at startup".
+
+# Profile pictures and card sizes (2026-11-22)
+
+Read from the launcher 1.0.9 APK **[code]**, not yet tried on the bar. The APK comes from the vendor's update endpoint: `POST …/pub/checkAppVersionV4?_allow_anonymous=true` with `{"appCode": "ultrabar.app"}` returns `downloadUrl` and its SHA-256 as `signature` (`3cc23255…`).
+
+## Profile pictures
+- A profile's `icon` from `1108` is copied into the stored profile (`Profile(ProfileDTO)`) and shown in the profile switcher (`ProfilePanel`, `ProfileAdapter`). It loads through Glide (`GlideExtend.loadSmartAsBitmap(…, "profile")`), **center-cropped**, from `http(s)://`, `file://`, an absolute path or `resId://<drawable>`. An empty or broken `icon` shows the "profile" placeholder.
+- The current profile's picture is 220×200 dp inside a 542×240 dp card, over a blurred copy of itself (`ClockCardBlurBackground`). Each profile in the list below it gets a 140×140 dp thumbnail (`desktop_switch_item`, 262 dp wide). The screen is 160 dpi, so dp = px.
+- A new bar's default profile ("Standard Mode") uses the photo `http://cdn.lifex360.com/ultrabar/desktop/default.png`.
+- Nothing reads a profile's `bgColor`, `iconScale`, `albumId` or `showName`. They're stored, but no code calls their getters, so a profile's name can't be hidden this way.
+- This app crops pictures to 220×200 and serves them like card icons.
+
+## Card sizes
+- Widgets have **no size field**. `WidgetProperty` is `id, name, icon, iconScale, bgColor` + `type, param` + `last, node, parentId`.
+- `HomeAdapter` inflates one fixed layout per type, and nothing resizes cards afterwards. Widths: **542 dp** (two slots) for `TIME` (`time_item_v2`) and the music player (`music_player_layout`); **261 dp** for everything else (apps, computer actions, multi-actions, shortcut groups, timer, world clock, weather, soundscape, devices, email, power-on card, unsupported). Heights fill the strip.
+- So a card can't be wider (no full-screen clock) or smaller than one slot. Smaller tiles only exist on a `HOT_KEY_GROUP` page (`RemoteAdapter`: two rows, `spanSize` 1 or 2).

@@ -5,16 +5,17 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, horizontalListSortingStrategy, sortableKeyboardCoordinates, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ArrowUpFromLine, Star } from "lucide-react";
+import { ArrowUpFromLine, ImagePlus, Star, Trash2 } from "lucide-react";
 import { useApp } from "../lib/store";
 import type { Profile, Widget } from "../lib/model";
+import { profileImagePng } from "../lib/icons";
 import { CardFace, cardIssue, cardStyle } from "../components/WidgetCard";
 import { Library, type LibItem } from "../components/Library";
 import { Inspector } from "../components/Inspector";
 import { ModuleInspector } from "../components/ModuleInspector";
 import { ModuleSide } from "../components/ModuleRail";
 import { placedModules } from "../lib/modules";
-import { Button, InlineInput, Switch } from "../components/ui";
+import { Button, InlineInput, Menu, Switch, useMenu } from "../components/ui";
 
 const SCREEN_W = 1424;
 
@@ -90,7 +91,8 @@ export function ProfileEditor({ profileId }: { profileId: string }) {
   return (
     <DndContext sensors={sensors} onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} onDragCancel={() => { setDragItem(null); setDropIndex(null); }}>
       <div className="editor" onMouseDown={(e) => { if (e.target === e.currentTarget) s.select(null); }}>
-        <div className="editor-head">
+        <div className="editor-head" style={{ alignItems: "center" }}>
+          <ProfileImage profile={profile} />
           <InlineInput className="name-input" value={profile.name} onCommit={(v) => s.update((d) => { d.profiles.find((p) => p.id === profile.id)!.name = v; })} />
         </div>
         <div className="editor-sub">
@@ -132,6 +134,49 @@ export function ProfileEditor({ profileId }: { profileId: string }) {
         )}
       </DragOverlay>
     </DndContext>
+  );
+}
+
+/** The picture the bar shows for this profile in its profile switcher. */
+function ProfileImage({ profile }: { profile: Profile }) {
+  const file = useRef<HTMLInputElement>(null);
+  const menu = useMenu();
+  const s = useApp.getState();
+  const setImage = (image: string | null) => s.update((d) => {
+    const p = d.profiles.find((x) => x.id === profile.id);
+    if (!p) return;
+    if (image) p.image = image;
+    else delete p.image;
+  });
+  const onFile = async (f: File | undefined) => {
+    if (!f) return;
+    try {
+      setImage(await profileImagePng(f));
+    } catch {
+      s.toast({ kind: "error", title: "Couldn't read that image" });
+    }
+  };
+  return (
+    <>
+      <input ref={file} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" hidden
+        onChange={(e) => { void onFile(e.target.files?.[0]); e.target.value = ""; }} />
+      <button
+        type="button" className={`profile-image${profile.image ? "" : " unset"}`} data-open={!!menu.anchor} aria-label="Profile image"
+        title={profile.image ? "Profile image, shown in the bar's profile switcher" : "Add an image for the bar's profile switcher"}
+        onClick={(e) => (profile.image ? menu.open(e.currentTarget) : file.current?.click())}
+      >
+        {profile.image ? <img src={profile.image} alt="" /> : <ImagePlus size={16} />}
+      </button>
+      {menu.anchor && (
+        <Menu
+          anchor={menu.anchor} onClose={menu.close}
+          items={[
+            { label: "Change image…", icon: <ImagePlus size={14} />, onSelect: () => file.current?.click() },
+            { label: "Remove image", icon: <Trash2 size={14} />, danger: true, onSelect: () => setImage(null) },
+          ]}
+        />
+      )}
+    </>
   );
 }
 
