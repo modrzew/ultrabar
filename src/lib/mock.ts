@@ -274,7 +274,7 @@ async function request(act: number, data: unknown): Promise<unknown> {
 
 export async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
   switch (cmd) {
-    case "app_info": return { clientId: "mock", hostname: "Browser", version: "0.1.0", pcAgentEnabled: true, iconPort: 47215 };
+    case "app_info": return { clientId: "mock", hostname: "Browser", version: "0.1.0", pcAgentEnabled: true, closeToTray: false, iconPort: 47215 };
     case "discover_bars": await sleep(1200); return [BAR];
     case "bar_status": return status;
     case "connect_bar": {
@@ -323,7 +323,7 @@ export async function invoke(cmd: string, args: Record<string, unknown> = {}): P
       return entry;
     }
     case "uninstall_pack": saveInstalledPacks(installedPacks().filter((p) => p.plugin.id !== args.id)); return;
-    case "set_allowed_actions": case "set_pc_agent_enabled": case "test_pc_action": case "refresh_bar_screen": return;
+    case "set_allowed_actions": case "set_pc_agent_enabled": case "set_close_to_tray": case "test_pc_action": case "refresh_bar_screen": return;
     case "running_apps": await sleep(300); return [
       { name: "Safari", path: "/Applications/Safari.app" },
       { name: "Slack", path: "/Applications/Slack.app" },

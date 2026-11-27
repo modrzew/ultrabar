@@ -7,6 +7,7 @@ import { upgradeProfiles, useApp } from "../lib/store";
 import { api, errorMessage, isTauri } from "../lib/api";
 import type { Doc } from "../lib/model";
 import { Button, ToggleRow } from "../components/ui";
+import { isMac } from "../lib/hid";
 import { statusText } from "../components/ConnectSheet";
 
 const DISCORD_VERB: Record<string, string> = {
@@ -33,6 +34,7 @@ export function SettingsView() {
   const s = useApp.getState();
   const [agent, setAgent] = useState(info?.pcAgentEnabled ?? true);
   const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [closeToTray, setCloseToTray] = useState(info?.closeToTray ?? false);
 
   useEffect(() => {
     if (isTauri) autostartEnabled().then(setAutostart).catch(() => setAutostart(null));
@@ -42,6 +44,17 @@ export function SettingsView() {
     setAgent(v);
     await api.setPcAgentEnabled(v);
     useApp.setState({ info: info ? { ...info, pcAgentEnabled: v } : info });
+  };
+
+  const toggleCloseToTray = async (v: boolean) => {
+    try {
+      await api.setCloseToTray(v);
+      setCloseToTray(v);
+      const cur = useApp.getState().info;
+      useApp.setState({ info: cur ? { ...cur, closeToTray: v } : cur });
+    } catch (e) {
+      s.toast({ kind: "error", title: "Couldn't change close behaviour", body: errorMessage(e) });
+    }
   };
 
   const toggleAutostart = async (v: boolean) => {
@@ -109,6 +122,16 @@ export function SettingsView() {
                   Only actions that are part of the layout you last deployed from this app will run. Anything else the bar asks for is blocked and shown below.
                   Keyboard shortcuts are typed by the bar over USB and don't need this.
                 </span>
+              </div>
+            </div>
+            <div className="group-row">
+              <div className="grow">
+                <ToggleRow
+                  title={isMac ? "Keep running in the menu bar when closed" : "Keep running in the tray when closed"}
+                  sub={isMac
+                    ? "Closing the window leaves computer actions and custom icons working. Quit from the menu bar icon or with ⌘Q."
+                    : "Closing the window leaves computer actions and custom icons working. Quit from the tray icon."}
+                  checked={closeToTray} onChange={(v) => void toggleCloseToTray(v)} />
               </div>
             </div>
             {autostart !== null && (

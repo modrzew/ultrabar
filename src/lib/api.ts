@@ -33,6 +33,7 @@ export interface AppInfo {
   hostname: string;
   version: string;
   pcAgentEnabled: boolean;
+  closeToTray: boolean;
   iconPort: number;
 }
 
@@ -193,6 +194,7 @@ export const api = {
   saveDoc: (doc: Doc) => call<void>("save_doc", { doc }),
   setAllowedActions: (actions: unknown[]) => call<void>("set_allowed_actions", { actions }),
   setPcAgentEnabled: (enabled: boolean) => call<void>("set_pc_agent_enabled", { enabled }),
+  setCloseToTray: (enabled: boolean) => call<void>("set_close_to_tray", { enabled }),
   testPcAction: (payload: unknown) => call<void>("test_pc_action", { payload }),
   runningApps: () => call<RunningApp[]>("running_apps"),
   /** Keeps a PNG (data URL) for the bar; returns its id (a content hash). */

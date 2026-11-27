@@ -12,6 +12,7 @@ mod screen;
 mod store;
 mod system;
 mod tls;
+mod tray;
 mod typing;
 
 use std::net::Ipv4Addr;
@@ -55,6 +56,7 @@ struct AppInfo {
     hostname: String,
     version: String,
     pc_agent_enabled: bool,
+    close_to_tray: bool,
     icon_port: u16,
 }
 
@@ -66,6 +68,7 @@ fn app_info(app: AppHandle, state: State<'_, AppState>) -> AppInfo {
         hostname: gethostname::gethostname().to_string_lossy().to_string(),
         version: app.package_info().version.to_string(),
         pc_agent_enabled: s.pc_agent_enabled,
+        close_to_tray: s.close_to_tray,
         icon_port: state.icons.port(),
     }
 }
@@ -253,6 +256,19 @@ fn set_pc_agent_enabled(state: State<'_, AppState>, enabled: bool) -> Result<(),
     state.store.save_settings(&s).map_err(|e| e.to_string())
 }
 
+/// Keep running with a tray icon when the window is closed.
+#[tauri::command]
+fn set_close_to_tray(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    tray::set_enabled(&app, enabled).map_err(|e| format!("Couldn't add the tray icon: {e}"))?;
+    let mut s = state.settings.lock().unwrap();
+    s.close_to_tray = enabled;
+    state.store.save_settings(&s).map_err(|e| e.to_string())
+}
+
 /// Run a PC-control action locally (the "Test" button in the editor).
 #[tauri::command]
 async fn test_pc_action(app: AppHandle, payload: Value) -> Result<(), String> {
@@ -408,11 +424,7 @@ pub fn run() {
         // Registered first so a second launch exits before setting anything
         // up. It brings this window to the front instead.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.unminimize();
-                let _ = w.set_focus();
-            }
+            tray::show_window(app)
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -431,6 +443,11 @@ pub fn run() {
             tauri::async_runtime::spawn(icons.clone().serve());
 
             let current = settings.current().cloned();
+            if settings.close_to_tray
+                && let Err(e) = tray::set_enabled(app.handle(), true)
+            {
+                eprintln!("tray: {e}");
+            }
             app.manage(AppState {
                 store,
                 settings: Mutex::new(settings),
@@ -451,6 +468,14 @@ pub fn run() {
                 state.replace_conn(Some(connection::spawn(app.handle().clone(), bar, false)));
             }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && tray::active(window.app_handle())
+            {
+                api.prevent_close();
+                let _ = window.hide();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
@@ -475,6 +500,7 @@ pub fn run() {
             save_doc,
             set_allowed_actions,
             set_pc_agent_enabled,
+            set_close_to_tray,
             test_pc_action,
             running_apps,
             ha_logged_in,
@@ -491,6 +517,17 @@ pub fn run() {
             write_json_file,
             read_json_file,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app, _event| {
+            // Clicking the Dock icon while the window is hidden in the menu bar.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = _event
+            {
+                tray::show_window(_app);
+            }
+        });
 }
