@@ -1,5 +1,6 @@
 //! Small JSON files in the app's data directory: connection settings (client
-//! identity, paired bars, PC-agent allowlist) and the user's layout document.
+//! identity, paired bars, PC-agent allowlist, window behaviour) and the user's
+//! layout document.
 
 use std::path::{Path, PathBuf};
 
@@ -57,6 +58,7 @@ pub struct Settings {
     pub current_bar: Option<String>,
     pub pc_agent_enabled: bool,
     pub allowed_actions: Vec<Value>,
+    pub close_to_tray: bool,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -72,6 +74,8 @@ struct SettingsDisk {
     pc_agent_enabled: bool,
     #[serde(default)]
     allowed_actions: Vec<Value>,
+    #[serde(default)]
+    close_to_tray: bool,
 }
 
 fn yes() -> bool {
@@ -150,6 +154,7 @@ impl Store {
             current_bar: disk.current_bar,
             pc_agent_enabled: disk.pc_agent_enabled,
             allowed_actions: disk.allowed_actions,
+            close_to_tray: disk.close_to_tray,
         };
         if s.client_id.is_empty() {
             s.client_id = uuid::Uuid::new_v4().to_string();
@@ -176,6 +181,7 @@ impl Store {
             current_bar: s.current_bar.clone(),
             pc_agent_enabled: s.pc_agent_enabled,
             allowed_actions: s.allowed_actions.clone(),
+            close_to_tray: s.close_to_tray,
         };
         self.write_atomic("settings.json", &serde_json::to_vec_pretty(&disk)?)
     }
